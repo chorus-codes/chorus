@@ -81,7 +81,18 @@ export function enrichRounds(
   const reviewOnly = isReviewOnlyTemplate(template);
   const expectedSlots = buildExpectedSlots(template, reviewOnly);
 
-  return rounds.map((round) => {
+  // Pre-spawn synthesis: when zero reviewer dirs exist on disk yet
+  // (chat just created, daemon's CLI semaphore is still queueing the
+  // first batch), `rounds` is `[]` — the .map() below would return
+  // `[]` and the run page would render no cards at all. Without this,
+  // cards "appear one-by-one" as each reviewer's dir lands, even
+  // though the placeholder synthesis below already supports queued
+  // reviewers — the loop just never ran. Seed an empty round-1 so
+  // every expected slot gets a QUEUED placeholder from t=0.
+  const seedRounds: RoundSnapshot[] =
+    rounds.length === 0 ? [{ round: 1, participants: [] }] : rounds;
+
+  return seedRounds.map((round) => {
     const enriched: ParticipantSnapshot[] = [];
     const seen = new Set<string>();
     for (const slot of expectedSlots) {
