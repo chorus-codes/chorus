@@ -161,6 +161,16 @@ describe('precheckLineage', () => {
 
   describe('keychain fallback (macOS)', () => {
     const mockExecFileSync = vi.mocked(execFileSync);
+    let originalPlatform: string;
+
+    beforeEach(() => {
+      originalPlatform = process.platform;
+      Object.defineProperty(process, 'platform', { value: 'darwin' });
+    });
+
+    afterEach(() => {
+      Object.defineProperty(process, 'platform', { value: originalPlatform });
+    });
 
     it('passes when no cred file but keychain entry exists', async () => {
       mockExecFileSync.mockReturnValueOnce(Buffer.from(''));
@@ -175,7 +185,6 @@ describe('precheckLineage', () => {
     });
 
     it('blocks when no cred file and no keychain entry', async () => {
-      // execFileSync throws by default (mock setup)
       const result = await precheckLineage('anthropic');
       expect(result.ok).toBe(false);
       if (!result.ok) expect(result.reason).toBe('auth_missing');
@@ -189,14 +198,9 @@ describe('precheckLineage', () => {
     });
 
     it('returns false on non-darwin platforms', () => {
-      const originalPlatform = process.platform;
       Object.defineProperty(process, 'platform', { value: 'linux' });
-      try {
-        expect(hasKeychainEntry('anthropic')).toBe(false);
-        expect(mockExecFileSync).not.toHaveBeenCalled();
-      } finally {
-        Object.defineProperty(process, 'platform', { value: originalPlatform });
-      }
+      expect(hasKeychainEntry('anthropic')).toBe(false);
+      expect(mockExecFileSync).not.toHaveBeenCalled();
     });
 
     it('returns false for lineages without keychain service', () => {
