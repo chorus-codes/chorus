@@ -12,7 +12,7 @@
  * we control.
  */
 
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -20,7 +20,13 @@ import { randomUUID } from 'node:crypto';
 
 import { _resetDbForTests, getDb } from '@/lib/db';
 import { recordHealth } from '@/lib/cli-health';
-import { precheckLineage } from '@/lib/cli-precheck';
+
+vi.mock('node:child_process', () => ({
+  execFileSync: vi.fn(() => { throw new Error('no keychain entry'); }),
+}));
+
+import { execFileSync } from 'node:child_process';
+import { precheckLineage, hasKeychainEntry } from '@/lib/cli-precheck';
 
 let dbPath: string;
 let fakeHome: string;
@@ -36,6 +42,9 @@ beforeEach(async () => {
   fakeHome = path.join(os.tmpdir(), `chorus-fakehome-${randomUUID()}`);
   fs.mkdirSync(fakeHome, { recursive: true });
   process.env.HOME = fakeHome;
+
+  vi.mocked(execFileSync).mockReset();
+  vi.mocked(execFileSync).mockImplementation(() => { throw new Error('no keychain entry'); });
 });
 
 afterEach(async () => {
@@ -147,6 +156,52 @@ describe('precheckLineage', () => {
         expect(result.ok).toBe(false);
         if (!result.ok) expect(result.cta).toMatch(c.needle);
       }
+    });
+  });
+
+  describe('keychain fallback (macOS)', () => {
+    const mockExecFileSync = vi.mocked(execFileSync);
+
+    it('passes when no cred file but keychain entry exists', async () => {
+      mockExecFileSync.mockReturnValueOnce(Buffer.from(''));
+
+      const result = await precheckLineage('anthropic');
+      expect(result.ok).toBe(true);
+      expect(mockExecFileSync).toHaveBeenCalledWith(
+        'security',
+        ['find-generic-password', '-s', 'Claude Code-credentials'],
+        expect.objectContaining({ stdio: 'ignore' }),
+      );
+    });
+
+    it('blocks when no cred file and no keychain entry', async () => {
+      // execFileSync throws by default (mock setup)
+      const result = await precheckLineage('anthropic');
+      expect(result.ok).toBe(false);
+      if (!result.ok) expect(result.reason).toBe('auth_missing');
+    });
+
+    it('skips keychain check when cred file exists', async () => {
+      writeFakeCred('.claude/.credentials.json');
+      const result = await precheckLineage('anthropic');
+      expect(result.ok).toBe(true);
+      expect(mockExecFileSync).not.toHaveBeenCalled();
+    });
+
+    it('returns false on non-darwin platforms', () => {
+      const originalPlatform = process.platform;
+      Object.defineProperty(process, 'platform', { value: 'linux' });
+      try {
+        expect(hasKeychainEntry('anthropic')).toBe(false);
+        expect(mockExecFileSync).not.toHaveBeenCalled();
+      } finally {
+        Object.defineProperty(process, 'platform', { value: originalPlatform });
+      }
+    });
+
+    it('returns false for lineages without keychain service', () => {
+      expect(hasKeychainEntry('openai')).toBe(false);
+      expect(mockExecFileSync).not.toHaveBeenCalled();
     });
   });
 });

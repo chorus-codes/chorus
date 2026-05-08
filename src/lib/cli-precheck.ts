@@ -26,6 +26,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
+import { execFileSync } from 'node:child_process';
 import { getHealth, type CliLineage } from './cli-health';
 
 export type PrecheckFailReason =
@@ -87,6 +88,30 @@ const LOGIN_HINT: Record<CliLineage, string> = {
 };
 
 /**
+ * Claude Code v2+ stores OAuth credentials in the macOS Keychain instead of a
+ * file on disk. Probe the Keychain for existence only (no `-w` flag — avoids
+ * ACL prompts in headless contexts). Returns false on non-macOS platforms.
+ */
+const KEYCHAIN_SERVICES: Partial<Record<CliLineage, string>> = {
+  anthropic: 'Claude Code-credentials',
+};
+
+export function hasKeychainEntry(lineage: CliLineage): boolean {
+  if (process.platform !== 'darwin') return false;
+  const service = KEYCHAIN_SERVICES[lineage];
+  if (!service) return false;
+  try {
+    execFileSync('security', ['find-generic-password', '-s', service], {
+      stdio: 'ignore',
+      timeout: 5000,
+    });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Check whether at least one of the candidate credential paths for `lineage`
  * exists and is readable. Existence-only — we don't parse contents (each CLI
  * has its own JSON shape and bearer-refresh lifecycle, neither of which we
@@ -136,8 +161,9 @@ export async function precheckLineage(lineage: CliLineage): Promise<PrecheckResu
 
   // Layer 2: credential file presence. Cheap, catches "logged out" without
   // paying the spawn tax. See CRED_PATHS for the per-CLI lookups.
+  // Falls back to macOS Keychain for CLIs that store creds there (Claude Code v2+).
   const cred = hasCredFile(lineage);
-  if (!cred.exists) {
+  if (!cred.exists && !hasKeychainEntry(lineage)) {
     return {
       ok: false,
       reason: 'auth_missing',
