@@ -50,11 +50,134 @@ function abbreviateHome(p: string): string {
   return p.startsWith(home) ? '~' + p.slice(home.length) : p;
 }
 
+/**
+ * Resolve the bin path through any symlinks before classifying. A
+ * `sudo npm install -g chorus-codes` plants a symlink at
+ * `/usr/bin/chorus` (or `/usr/local/bin/chorus`) pointing into
+ * `/usr/lib/node_modules/chorus-codes/bin/chorus.mjs`. Node's
+ * `process.argv[1]` returns the SYMLINK path on Linux, not the
+ * resolved target — so the raw path matches none of the
+ * `node_modules` / `dist` / `.ts` substrings and `detectInstallMode`
+ * returns `'unknown'`.
+ *
+ * realpath fixes that. Wrapped in try/catch because a broken symlink
+ * (or a path we can't stat) shouldn't abort the diagnostic — we fall
+ * back to the original path so the report still tells you SOMETHING.
+ */
+function resolveBinPath(rawBinPath: string): string {
+  try {
+    return fs.realpathSync(rawBinPath);
+  } catch {
+    return rawBinPath;
+  }
+}
+
 function detectInstallMode(binPath: string): DiagnoseSnapshot['install']['mode'] {
   if (binPath.includes('node_modules')) return 'global-npm';
   if (binPath.endsWith('.ts')) return 'dev-tsx';
   if (binPath.includes('/dist/') || binPath.includes('\\dist\\')) return 'local-dist';
   return 'unknown';
+}
+
+/**
+ * Drop log lines that are known-benign — they make a bug-report block
+ * look scarier than it is, and they're not actionable. Currently just
+ * Next.js 16's "failed to pipe response" trace which fires whenever an
+ * SSE client (browser tab) closes mid-stream — expected behaviour, not
+ * an error worth surfacing.
+ *
+ * Conservative: only filters specific known patterns. New noise types
+ * earn their entry by being explicitly added — we don't want to hide
+ * an actual bug because its message vaguely matches a regex.
+ */
+function filterBenignNoise(text: string): { kept: string; filteredCount: number } {
+  if (!text || text.startsWith('(')) return { kept: text, filteredCount: 0 };
+  // The Next.js 16 SSE pipe-close trace spans ~15 lines starting from
+  // `⨯ Error: failed to pipe response` and ending after the inner
+  // `UND_ERR_SOCKET` block. We split on a `}` line that follows a
+  // `code: 'UND_ERR_SOCKET'` to find the end of the trace.
+  //
+  // Two cases to handle:
+  //   1. Full trace within the window — match opening line, drop until
+  //      brace depth returns to <= 0.
+  //   2. Trace tail orphaned at start of window (the trace's opening
+  //      line was BEFORE our raw-tail window). The orphan opens with
+  //      stack/cause fragments like `at async ...{` or `[cause]: ...`
+  //      with no preceding error line; keep dropping until we hit the
+  //      end-of-trace `}` cluster. We detect this by looking back from
+  //      a `code: 'UND_ERR_SOCKET'` line — if found in the first N
+  //      lines without a preceding `failed to pipe response`, the
+  //      window is starting mid-trace and we drop everything before
+  //      and including the trace closer.
+  const lines = text.split('\n');
+
+  // Pass 1: find an orphan trace tail (UND_ERR_SOCKET without a
+  // preceding `failed to pipe response`) and trim everything before
+  // its closer.
+  const orphanIdx = lines.findIndex((l) => l.includes("code: 'UND_ERR_SOCKET'"));
+  let startIdx = 0;
+  let orphanCount = 0;
+  if (orphanIdx >= 0) {
+    let sawOpener = false;
+    for (let i = 0; i <= orphanIdx; i++) {
+      if (lines[i].includes('failed to pipe response')) {
+        sawOpener = true;
+        break;
+      }
+    }
+    if (!sawOpener) {
+      // Walk forward from orphanIdx to find the trace closer (a line
+      // that's just `}` or `  }` after which the next line either ends
+      // the cluster or starts new content).
+      let braceDepth = 0;
+      let closeIdx = orphanIdx;
+      for (let i = 0; i <= orphanIdx; i++) {
+        for (const ch of lines[i]) {
+          if (ch === '{') braceDepth++;
+          else if (ch === '}') braceDepth--;
+        }
+      }
+      for (let i = orphanIdx + 1; i < lines.length; i++) {
+        for (const ch of lines[i]) {
+          if (ch === '{') braceDepth++;
+          else if (ch === '}') braceDepth--;
+        }
+        if (braceDepth <= 0 && lines[i].trim().endsWith('}')) {
+          closeIdx = i;
+          break;
+        }
+      }
+      startIdx = closeIdx + 1;
+      orphanCount = 1;
+    }
+  }
+
+  // Pass 2: walk the rest of the window dropping full traces.
+  const out: string[] = [];
+  let dropping = false;
+  let braceDepth = 0;
+  let filteredCount = orphanCount;
+  for (let i = startIdx; i < lines.length; i++) {
+    const line = lines[i];
+    if (!dropping && line.includes('failed to pipe response')) {
+      dropping = true;
+      braceDepth = 0;
+      filteredCount++;
+      continue;
+    }
+    if (dropping) {
+      for (const ch of line) {
+        if (ch === '{') braceDepth++;
+        else if (ch === '}') braceDepth--;
+      }
+      if (braceDepth <= 0 && line.trim().endsWith('}')) {
+        dropping = false;
+      }
+      continue;
+    }
+    out.push(line);
+  }
+  return { kept: out.join('\n'), filteredCount };
 }
 
 function tailFile(p: string, lines: number): string {
@@ -195,14 +318,29 @@ async function gather(): Promise<DiagnoseSnapshot> {
       release: os.release(),
     },
     install: {
-      binPath: abbreviateHome(process.argv[1] ?? '(unknown)'),
-      mode: detectInstallMode(process.argv[1] ?? ''),
+      // realpath the bin path so symlinks (e.g. /usr/bin/chorus →
+      // /usr/lib/node_modules/chorus-codes/bin/chorus.mjs from a
+      // global npm install) resolve before classification.
+      binPath: abbreviateHome(resolveBinPath(process.argv[1] ?? '(unknown)')),
+      mode: detectInstallMode(resolveBinPath(process.argv[1] ?? '')),
     },
     daemon: { daemonJson: daemonJsonRaw, daemonPidAlive, healthyOnPort },
     db: { chats: chatsCount, voices: voicesCount },
     logs: {
       daemonTail: tailFile(path.join(chorusDir, 'logs', 'daemon.log'), 50),
-      webTail: tailFile(path.join(chorusDir, 'logs', 'web.log'), 20),
+      // Strip Next.js 16's SSE pipe-close noise so the bug report
+      // doesn't look scary for what's actually a benign client
+      // disconnect. Read 300 raw lines (each trace ~15 lines, so this
+      // captures up to ~20 traces fully) then surface 20 post-filter
+      // so real errors aren't pushed out by noise.
+      webTail: (() => {
+        const raw = tailFile(path.join(chorusDir, 'logs', 'web.log'), 300);
+        const { kept, filteredCount } = filterBenignNoise(raw);
+        const trimmed = kept.split('\n').slice(-20).join('\n').trim();
+        return filteredCount > 0
+          ? `${trimmed}\n  (${filteredCount} benign SSE-disconnect trace${filteredCount === 1 ? '' : 's'} filtered)`
+          : trimmed;
+      })(),
     },
     crashes: { count: crashCount, latest: latestCrash },
     clis,
@@ -296,4 +434,11 @@ export function registerDiagnoseCommand(program: Command): void {
 }
 
 // Exported for tests — pure function over a snapshot is easy to assert.
-export const _testing = { gather, formatReport, detectInstallMode, abbreviateHome };
+export const _testing = {
+  gather,
+  formatReport,
+  detectInstallMode,
+  abbreviateHome,
+  resolveBinPath,
+  filterBenignNoise,
+};

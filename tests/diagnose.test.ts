@@ -7,10 +7,12 @@
  */
 
 import { describe, expect, it } from 'vitest';
+import fs from 'fs';
 import os from 'os';
+import path from 'path';
 import { _testing } from '@/cli/commands/diagnose';
 
-const { detectInstallMode, abbreviateHome, formatReport } = _testing;
+const { detectInstallMode, abbreviateHome, formatReport, resolveBinPath, filterBenignNoise } = _testing;
 
 describe('detectInstallMode', () => {
   it('classifies node_modules path as global-npm', () => {
@@ -134,5 +136,136 @@ describe('formatReport', () => {
     expect(out).toContain('count:           2');
     expect(out).toContain('2026-05-08T10-00-00.log');
     expect(out).toContain('Error: boom');
+  });
+});
+
+describe('resolveBinPath', () => {
+  it('resolves a symlink to its real target', () => {
+    // Build a real symlink chain in /tmp so we cover the actual
+    // realpath path (no mocks). This is the install-mode bug
+    // reported on /usr/bin/chorus → node_modules/.../chorus.mjs.
+    const tmp = path.join(os.tmpdir(), `chorus-realpath-${Date.now()}-${Math.random()}`);
+    fs.mkdirSync(tmp, { recursive: true });
+    const realFile = path.join(tmp, 'fake-chorus.mjs');
+    fs.writeFileSync(realFile, 'placeholder');
+    const link = path.join(tmp, 'chorus-link');
+    fs.symlinkSync(realFile, link);
+    try {
+      const resolved = resolveBinPath(link);
+      // realpath strips symlinks (and may resolve /private/var on
+      // macOS) — assert the basename matches the real file rather
+      // than equality, so the test is portable.
+      expect(path.basename(resolved)).toBe('fake-chorus.mjs');
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it('falls back to the raw path when realpath throws (broken symlink)', () => {
+    const ghost = '/tmp/chorus-does-not-exist-' + Math.random();
+    expect(resolveBinPath(ghost)).toBe(ghost);
+  });
+
+  it('returns input unchanged for "(unknown)" sentinel', () => {
+    expect(resolveBinPath('(unknown)')).toBe('(unknown)');
+  });
+});
+
+describe('detectInstallMode after realpath', () => {
+  it('classifies a globally-installed bin as global-npm once symlink is followed', () => {
+    // Simulate the full bug: raw path is /usr/bin/chorus (returns
+    // 'unknown'), but realpath target is in node_modules. With the
+    // fix, gather() resolves first then classifies.
+    const realLikePath =
+      '/usr/lib/node_modules/chorus-codes/bin/chorus.mjs';
+    expect(detectInstallMode(realLikePath)).toBe('global-npm');
+  });
+});
+
+describe('filterBenignNoise', () => {
+  it('drops the Next.js SSE pipe-close trace block', () => {
+    const noisy = [
+      "[2026-05-08T06:12:51] info: server up",
+      "  ⨯ Error: failed to pipe response",
+      "      at l (.next/server/chunks/332.js:15:6940)",
+      "      at async g (.next/server/app/api/run-artifacts/[chatId]/route.js:1:10987) {",
+      "    [cause]: TypeError: terminated",
+      "        at ignore-listed frames {",
+      "      [cause]: Error [SocketError]: other side closed",
+      "          at ignore-listed frames {",
+      "        code: 'UND_ERR_SOCKET',",
+      "        socket: [Object]",
+      "      }",
+      "    }",
+      "  }",
+      "▲ Next.js 16.2.4",
+    ].join('\n');
+    const { kept, filteredCount } = filterBenignNoise(noisy);
+    expect(filteredCount).toBe(1);
+    expect(kept).toContain('server up');
+    expect(kept).toContain('Next.js 16.2.4');
+    expect(kept).not.toContain('failed to pipe response');
+    expect(kept).not.toContain('UND_ERR_SOCKET');
+  });
+
+  it('passes unrelated errors through unchanged', () => {
+    const real = [
+      'Error: something actually broke',
+      '  at foo (bar.js:42:7)',
+      '✓ Ready in 101ms',
+    ].join('\n');
+    const { kept, filteredCount } = filterBenignNoise(real);
+    expect(filteredCount).toBe(0);
+    expect(kept).toBe(real);
+  });
+
+  it('passes through "(file not present)" sentinel without scanning', () => {
+    const { kept, filteredCount } = filterBenignNoise('(file not present)');
+    expect(kept).toBe('(file not present)');
+    expect(filteredCount).toBe(0);
+  });
+
+  it('strips an orphan trace tail when the window starts mid-trace', () => {
+    // Real-world reproduction: tailFile reads N lines but a trace
+    // started before the window. Without orphan handling the dangling
+    // `code: 'UND_ERR_SOCKET'` and surrounding stack lines surface in
+    // the bug report.
+    const orphan = [
+      "      at async Module.V (.next/server/app/api/daemon/[...path]/route.js:1:9000) {",
+      "    [cause]: TypeError: terminated",
+      "        at ignore-listed frames {",
+      "      [cause]: Error [SocketError]: other side closed",
+      "          at ignore-listed frames {",
+      "        code: 'UND_ERR_SOCKET',",
+      "        socket: [Object]",
+      "      }",
+      "    }",
+      "  }",
+      '▲ Next.js 16.2.4',
+      '  ✓ Ready in 101ms',
+    ].join('\n');
+    const { kept, filteredCount } = filterBenignNoise(orphan);
+    expect(filteredCount).toBe(1);
+    expect(kept).not.toContain('UND_ERR_SOCKET');
+    expect(kept).not.toContain('SocketError');
+    expect(kept).toContain('Next.js 16.2.4');
+    expect(kept).toContain('Ready in 101ms');
+  });
+
+  it('handles multiple trace blocks in one tail', () => {
+    const block = [
+      '  ⨯ Error: failed to pipe response',
+      '    {',
+      "      code: 'UND_ERR_SOCKET',",
+      '    }',
+      '  }',
+    ].join('\n');
+    const text = `before\n${block}\nmiddle\n${block}\nafter`;
+    const { kept, filteredCount } = filterBenignNoise(text);
+    expect(filteredCount).toBe(2);
+    expect(kept).toContain('before');
+    expect(kept).toContain('middle');
+    expect(kept).toContain('after');
+    expect(kept).not.toContain('UND_ERR_SOCKET');
   });
 });
