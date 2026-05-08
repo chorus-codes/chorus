@@ -15,6 +15,10 @@ import * as participantAborts from '../participant-aborts.js';
 import type { TmuxManager } from '../tmux-types.js';
 import { buildReviewerAsk } from './prompt-builder.js';
 import { runReviewerHeadless } from './reviewer.js';
+import {
+  release as releaseFallbackClaim,
+  tryClaim as tryClaimFallbackTarget,
+} from './fallback-registry.js';
 import { runWithChainFallback, runWithModelFallback } from './run-with-fallback.js';
 import { sanitizeName } from './sanitize-name.js';
 import { appendSwapSidecar } from './swap-sidecar.js';
@@ -347,29 +351,79 @@ async function runReviewer(
       return await runWithChainFallback(
         chain,
         async (entry) => {
-          // Cross-lineage swap: when the entry's lineage differs from the
-          // slot's primary, re-resolve the shim. The slot's identity
-          // (agentName, reviewerDir, participant key) stays bound to the
-          // primary lineage so the cockpit card doesn't re-key mid-run —
-          // the cli_warning below tells the UI a swap happened.
-          const entryShim = entry.lineage === candidate.lineage
-            ? shim
-            : pickShimForVoice(entry.lineage as Lineage, entry.model);
-          return runReviewerHeadless({
-            shim: entryShim,
+          // Cross-slot collision check: another reviewer in this same
+          // chat/round may already be running this exact (lineage,
+          // model). Common cause is two slots sharing the template-
+          // level fallback (e.g. anthropic/claude-sonnet-4-6 at the
+          // tail of every slot's chain). Without this, both slots
+          // dispatch the same model in parallel — wasted cost AND the
+          // lineage diversity that's the whole point of multi-LLM
+          // peer review collapses. On collision, we return null so
+          // runWithChainFallback advances to the next chain entry;
+          // emits a cli_warning tagged `fallback_collision` so the
+          // cockpit can show why the slot skipped.
+          const claimed = tryClaimFallbackTarget(
             chatId,
-            phase,
             round,
-            reviewerIdx,
-            candidateLineage: entry.lineage,
-            candidateModel: entry.model,
-            agentName,
-            askContent: ask,
-            answerFile,
-            reviewerDir,
-            abortSignal: handle.signal,
-            onEvent,
-          });
+            entry.lineage,
+            entry.model,
+          );
+          if (!claimed) {
+            console.warn(
+              `[reviewer] fallback collision chat=${chatId} round=${round} ` +
+                `slot=${agentName}-${reviewerIdx} ` +
+                `target=${entry.lineage}/${entry.model ?? '(default)'} ` +
+                `— another slot is already running it; advancing chain`,
+            );
+            onEvent({
+              chatId,
+              type: 'cli_warning',
+              payload: {
+                phaseId: phase.id,
+                round,
+                role: 'reviewer',
+                agent: `${agentName}-${reviewerIdx}`,
+                reason: 'fallback_collision',
+                fromLineage: entry.lineage,
+                toLineage: entry.lineage,
+                fromModel: entry.model ?? '(default)',
+                toModel: entry.model ?? '(default)',
+                message: `Skipping ${entry.lineage}/${entry.model ?? '(default)'} — another reviewer slot is already running it. Advancing to next fallback to preserve lineage diversity.`,
+              },
+              ts: Date.now(),
+            });
+            return null;
+          }
+          try {
+            // Cross-lineage swap: when the entry's lineage differs from the
+            // slot's primary, re-resolve the shim. The slot's identity
+            // (agentName, reviewerDir, participant key) stays bound to the
+            // primary lineage so the cockpit card doesn't re-key mid-run —
+            // the cli_warning below tells the UI a swap happened.
+            const entryShim = entry.lineage === candidate.lineage
+              ? shim
+              : pickShimForVoice(entry.lineage as Lineage, entry.model);
+            return await runReviewerHeadless({
+              shim: entryShim,
+              chatId,
+              phase,
+              round,
+              reviewerIdx,
+              candidateLineage: entry.lineage,
+              candidateModel: entry.model,
+              agentName,
+              askContent: ask,
+              answerFile,
+              reviewerDir,
+              abortSignal: handle.signal,
+              onEvent,
+            });
+          } finally {
+            // Release whether the attempt succeeded, returned null, or
+            // threw — the slot is no longer running this target, so
+            // another slot's chain advance can claim it next.
+            releaseFallbackClaim(chatId, round, entry.lineage, entry.model);
+          }
         },
         (from, to, fromIdx) => {
           const sameLineage = from.lineage === to.lineage;

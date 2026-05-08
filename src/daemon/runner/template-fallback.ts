@@ -11,14 +11,28 @@
  * are first-class: a codex reviewer hitting quota can fall through to a
  * claude or kimi fallback.
  *
- * Strict (lineage, model) dedup:
- *   - Skip a fallback row that matches the slot's own current model — would
- *     just fail again.
- *   - Skip a fallback row that matches ANOTHER active slot in the same
- *     phase. Example: reviewers=[kimi, deepseek] + fallback=[kimi]
- *     should NOT spawn a second kimi reviewer when deepseek fails.
- *   - Cross-lineage fallback dedup uses (lineage, model) tuples so two slots
- *     of different lineages on the same model name (rare) don't collide.
+ * Strict (lineage, model) dedup — TWO layers:
+ *
+ *   Build-time (this module):
+ *     - Skip a fallback row that matches the slot's own current model — would
+ *       just fail again.
+ *     - Skip a fallback row that matches ANOTHER active slot's PRIMARY in the
+ *       same phase. Example: reviewers=[kimi, deepseek] + fallback=[kimi]
+ *       should NOT spawn a second kimi reviewer when deepseek fails.
+ *     - Cross-lineage fallback dedup uses (lineage, model) tuples so two
+ *       slots of different lineages on the same model name (rare) don't
+ *       collide.
+ *
+ *   Runtime (`fallback-registry.ts`):
+ *     - When two slots BOTH carry the same template fallback in their chains
+ *       (the common case — one shared template-level fallback list applied
+ *       to every slot), build-time dedup can't catch it because each slot
+ *       only knows about other slots' PRIMARIES, not their fallback chains.
+ *     - The reviewer-driver claims the (lineage, model) before each attempt
+ *       and releases after; if a sibling slot is already running the same
+ *       target, claim returns false and the chain advances to the next
+ *       entry. This is what prevents the "two reviewers fall back to the
+ *       same model in parallel" waste case (incident 2026-05-08).
  *
  * Diversity-first ordering:
  *   When multiple fallbacks survive dedup, sort by lineage occurrence
