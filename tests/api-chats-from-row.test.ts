@@ -107,4 +107,55 @@ describe('fromRow — template_snapshot parsing', () => {
       expect(chat.templateSnapshot).toBeUndefined();
     }
   });
+
+  it('snapshot derives candidatesWithModels from candidates so cards can show model name', () => {
+    // Regression — the daemon writes template_snapshot in the runtime
+    // TemplateSchema shape (only `candidates`), but the cockpit Template
+    // type expects `candidatesWithModels` populated. Without deriving it
+    // here, enrichRounds iterates zero reviewer slots and no model name
+    // shows on any card. User-reported 2026-05-08: "model names have
+    // disappeared in card titles, they used to be there".
+    const tmpl = validTemplate();
+    const chat = _testing.fromRow({
+      ...baseRow,
+      template_snapshot: JSON.stringify(tmpl),
+    });
+    const reviewer = chat.templateSnapshot?.phases?.[0]?.reviewer;
+    expect(reviewer).toBeDefined();
+    expect(reviewer?.candidatesWithModels).toBeDefined();
+    expect(reviewer?.candidatesWithModels?.length).toBe(1);
+    expect(reviewer?.candidatesWithModels?.[0]?.lineage).toBe('openai');
+    expect(reviewer?.candidatesWithModels?.[0]?.models?.[0]).toBe('gpt-5.5');
+  });
+
+  it('preserves candidatesWithModels when snapshot already carries it (idempotent)', () => {
+    // If a future daemon version starts including candidatesWithModels
+    // in the snapshot directly, fromRow must not double-derive or
+    // clobber. Round-trip should be a no-op.
+    const tmpl = validTemplate();
+    // Forge a snapshot that has BOTH candidates and candidatesWithModels
+    // (as cockpit-side getTemplate would produce).
+    const enriched = {
+      ...tmpl,
+      phases: tmpl.phases.map((p) => ({
+        ...p,
+        reviewer: p.reviewer
+          ? {
+              ...p.reviewer,
+              candidatesWithModels: (p.reviewer.candidates ?? []).map((c) => ({
+                lineage: c.lineage,
+                models: c.models ?? [],
+              })),
+            }
+          : p.reviewer,
+      })),
+    };
+    const chat = _testing.fromRow({
+      ...baseRow,
+      template_snapshot: JSON.stringify(enriched),
+    });
+    const reviewer = chat.templateSnapshot?.phases?.[0]?.reviewer;
+    expect(reviewer?.candidatesWithModels?.length).toBe(1);
+    expect(reviewer?.candidatesWithModels?.[0]?.models?.[0]).toBe('gpt-5.5');
+  });
 });

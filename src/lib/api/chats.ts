@@ -75,7 +75,37 @@ function fromRow(row: RawChatRow): Chat {
       const parsed = JSON.parse(row.template_snapshot);
       const result = TemplateSchema.safeParse(parsed);
       if (result.success) {
-        templateSnapshot = result.data as unknown as Template;
+        // Daemon-side TemplateSchema only carries `candidates` on each
+        // ReviewerRule — the cockpit's Template type expects
+        // `candidatesWithModels` populated (mirrors what
+        // `lib/api/templates.ts:getTemplate` produces from the daemon's
+        // /templates response). Without this derivation,
+        // `enrichRounds` iterates zero reviewer slots from the snapshot
+        // and no model name reaches the run-page cards. Regression
+        // since chorus-101 (template snapshot, v0.8.26).
+        const enriched = {
+          ...result.data,
+          phases: result.data.phases.map((p) => ({
+            ...p,
+            reviewer: p.reviewer
+              ? {
+                  ...p.reviewer,
+                  candidatesWithModels:
+                    // If a future daemon ever serialises this field
+                    // directly, prefer it; otherwise derive from
+                    // candidates.
+                    (p.reviewer as { candidatesWithModels?: unknown[] })
+                      .candidatesWithModels ??
+                    (p.reviewer.candidates ?? []).map((c) => ({
+                      lineage: c.lineage,
+                      models: c.models ?? [],
+                      ...(c.persona !== undefined ? { persona: c.persona } : {}),
+                    })),
+                }
+              : p.reviewer,
+          })),
+        };
+        templateSnapshot = enriched as unknown as Template;
       }
       // else: leave undefined — caller's fallback handles it
     } catch {
