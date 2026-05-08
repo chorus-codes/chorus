@@ -4,6 +4,7 @@ import open from 'open';
 import os from 'os';
 import path from 'path';
 import { resolveCockpitUrl } from '../lib/daemon-discovery.js';
+import { registerDiagnoseCommand } from './commands/diagnose.js';
 import { registerDoctorCommand } from './commands/doctor.js';
 import { registerInitCommand } from './commands/init.js';
 import { registerStartCommand } from './commands/start.js';
@@ -60,6 +61,7 @@ registerStartCommand(program);
 registerStopCommand(program);
 registerStatusCommand(program);
 registerDoctorCommand(program);
+registerDiagnoseCommand(program);
 registerUpdateCommand(program);
 
 program

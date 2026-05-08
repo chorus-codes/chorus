@@ -328,7 +328,29 @@ chorus start --ui       # boot + open browser
 chorus stop             # shut it down
 chorus status           # is it running?
 chorus doctor           # diagnose AI tool detection / sandbox issues
+chorus diagnose         # print a redacted diagnostic bundle for bug reports
 ```
+
+---
+
+## Reporting bugs
+
+When something goes wrong, run:
+
+```bash
+chorus diagnose
+```
+
+It prints a fenced markdown block with: chorus version, running daemon
+version (and a **VERSION MISMATCH** flag if the CLI was upgraded but the
+daemon hasn't been restarted), node + OS + arch, daemon health, DB
+counts, CLI detection, the latest crash dump if any, and the last 50
+lines of `daemon.log`. Paste the block into a new issue at
+<https://github.com/chorus-codes/chorus/issues/new>.
+
+If chorus crashes hard (uncaught exception during boot — common on
+older Node + Windows combos), a self-contained crash log is written to
+`~/.chorus/crashes/<timestamp>.log`. Attach it to the issue.
 
 ---
 
