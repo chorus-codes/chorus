@@ -7,7 +7,6 @@
  *   - 90s silence after first write (matches openbridge timeout)
  */
 
-import chokidar from 'chokidar';
 import fs from 'fs';
 import path from 'path';
 
@@ -27,10 +26,11 @@ export interface WatcherResult {
  *
  * Rejects on timeoutMs reached.
  */
-export function waitForAnswer(
+export async function waitForAnswer(
   answerFile: string,
   opts: { timeoutMs: number; doneSentinel?: string }
 ): Promise<WatcherResult> {
+  const { default: chokidar } = await import('chokidar');
   const sentinel = opts.doneSentinel || '## DONE';
   const silenceTimeoutMs = 90_000;
   const answerDir = path.dirname(answerFile);
