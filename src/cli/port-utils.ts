@@ -75,6 +75,7 @@ export function findPidsOnPort(port: number): number[] {
       const out = execSync(cmd, {
         encoding: 'utf-8',
         stdio: ['ignore', 'pipe', 'ignore'],
+        timeout: 1000,
       });
       const pids = parse(out);
       if (pids.length > 0) return Array.from(new Set(pids));
@@ -128,6 +129,7 @@ export function findPidsOnPortWithSudo(port: number): number[] {
       const out = execFileSync('sudo', argv, {
         encoding: 'utf-8',
         stdio: ['ignore', 'pipe', 'ignore'],
+        timeout: 1000,
       });
       const pids = parse(out);
       if (pids.length > 0) return Array.from(new Set(pids));
@@ -390,4 +392,3 @@ export async function killAndVerify(
   );
   return false;
 }
-
