@@ -1,6 +1,6 @@
 import { Command } from 'commander';
 import fs from 'fs';
-import open from 'open';
+import { openBrowser } from './open-browser.js';
 import os from 'os';
 import path from 'path';
 import { resolveCockpitUrl } from '../lib/daemon-discovery.js';
@@ -79,7 +79,7 @@ program
       }
       console.log('');
       if (shouldAutoOpenBrowser(env)) {
-        await open(cockpitUrl);
+        await openBrowser(cockpitUrl);
         console.log(`\nOpening ${cockpitUrl}...`);
       }
     } catch (error) {

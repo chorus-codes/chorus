@@ -1,7 +1,7 @@
 import { execFileSync, spawn } from 'child_process';
 import type { Command } from 'commander';
 import fs from 'fs';
-import open from 'open';
+import { openBrowser } from '../open-browser.js';
 import os from 'os';
 import path from 'path';
 import {
@@ -260,7 +260,7 @@ async function alreadyRunningHealthy(
     }
     console.log('');
     if (uiFlag && shouldAutoOpenBrowser(env)) {
-      open(cockpitUrl);
+      await openBrowser(cockpitUrl);
     }
   } else {
     console.log('');
@@ -362,7 +362,7 @@ async function spawnCockpitForExistingDaemon(
   }
   console.log('');
   if (shouldAutoOpenBrowser(env)) {
-    open(cockpitUrl);
+    await openBrowser(cockpitUrl);
   }
 }
 
@@ -738,9 +738,9 @@ function scheduleAutoOpenBrowser(
   uiFlag: boolean | undefined,
   cockpitPort: number,
 ): void {
-  setTimeout(() => {
+  setTimeout(async () => {
     if (uiFlag && shouldAutoOpenBrowser(detectRuntimeEnv())) {
-      open(`http://127.0.0.1:${cockpitPort}`);
+      await openBrowser(`http://127.0.0.1:${cockpitPort}`);
     }
   }, 1000);
 }
