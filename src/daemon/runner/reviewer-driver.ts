@@ -2,7 +2,6 @@ import fs from 'fs';
 import path from 'path';
 import { DEFAULT_TMUX_PHASE_TIMEOUT_MS, type StandardPhase } from '../../lib/template-schema.js';
 import { recordHealth, kindToStatus, type CliLineage } from '../../lib/cli-health.js';
-import { recordVoiceFailure, recordVoiceSuccess } from '../../lib/voice-failure-tracker.js';
 import { precheckLineage } from '../../lib/cli-precheck.js';
 import { personas } from '../../lib/db/index.js';
 import { getPermissions } from '../../lib/settings/permissions.js';
@@ -110,6 +109,31 @@ export async function runReviewers(
   async function runOne(idx: number): Promise<void> {
     if (abortSignal.aborted) return;
     const candidate = candidates[idx];
+    // Resolve the agent name for events here so phase_start/phase_done
+    // carry the same `agent` shape the cockpit + per-reviewer error/
+    // warning events already emit (`<shimName>-<idx>`). Without this,
+    // successful reviewers never produced a `phase_start` / `phase_done`
+    // pair and the runner-multiplex persister had nothing to write to
+    // SQLite — so /chats/:id and the CLI's /show only saw the doer side
+    // even though answer.md + verdict were correct on disk. Errored
+    // reviewers were unaffected (cli_error has its own persistence
+    // path). Mirrors the doer pattern in runner.ts.
+    const reviewerModel = candidate.models?.[0];
+    const reviewerShim = pickShimForVoice(candidate.lineage as Lineage, reviewerModel);
+    const reviewerAgentLabel = `${reviewerShim.name}-${idx}`;
+    onEvent({
+      chatId,
+      type: 'phase_start',
+      payload: {
+        phaseId: phase.id,
+        phaseIdx,
+        kind: phase.kind,
+        round,
+        role: 'reviewer',
+        agent: reviewerAgentLabel,
+      },
+      ts: Date.now(),
+    });
     try {
       const res = await runReviewer(
         chatDir,
@@ -131,6 +155,27 @@ export async function runReviewers(
         reviewer: `${candidate.lineage}-${idx}`,
         outcome: res === null ? 'failed' : res ? 'agreed' : 'disagreed',
       });
+      // Only emit phase_done for outcomes the runner actually got a
+      // verdict on (agreed / disagreed). `null` outcomes already
+      // produced a cli_error / cli_warning earlier in the chain — those
+      // carry the failure into phase_events with state='errored' /
+      // 'warning' and we'd double-count by also emitting phase_done.
+      if (res !== null) {
+        onEvent({
+          chatId,
+          type: 'phase_done',
+          payload: {
+            phaseId: phase.id,
+            phaseIdx,
+            kind: phase.kind,
+            round,
+            role: 'reviewer',
+            agent: reviewerAgentLabel,
+            verdict: res ? 'agreed' : 'disagreed',
+          },
+          ts: Date.now(),
+        });
+      }
     } catch {
       reviews.push({
         reviewer: `${candidate.lineage}-${idx}`,
@@ -600,38 +645,6 @@ async function runReviewer(
           }).catch((healthErr: unknown) => {
             console.error(`[chorus] recordHealth failed for ${candidate.lineage}:`, healthErr);
           });
-          // Per-voice failure tracking (#11). Only count quota_exhausted
-          // — other error kinds (mcp_handshake_failed, network blips)
-          // shouldn't accumulate against the voice's strikes counter.
-          if (err.kind === 'quota_exhausted') {
-            recordVoiceFailure({
-              lineage: candidate.lineage as CliLineage,
-              model: candidate.models?.[0],
-              hasResetAt: typeof err.resetAt === 'number',
-            })
-              .then((result) => {
-                if (result.disabled) {
-                  onEvent({
-                    chatId,
-                    type: 'cli_warning',
-                    payload: {
-                      phaseId: phase.id,
-                      round,
-                      role: 'reviewer',
-                      agent: `${agentName}-${reviewerIdx}`,
-                      reason: 'voice_auto_disabled',
-                      voiceId: result.voiceId,
-                      detail:
-                        'Voice auto-disabled after persistent quota_exhausted with no reset window. Re-enable on the Connect page if your account has changed.',
-                    },
-                    ts: Date.now(),
-                  });
-                }
-              })
-              .catch((trackErr: unknown) => {
-                console.error('[chorus] recordVoiceFailure failed:', trackErr);
-              });
-          }
           onEvent({
             chatId,
             type: 'cli_error',
@@ -660,14 +673,6 @@ async function runReviewer(
       // Watcher resolved on timeout/silence with no real answer.
       return null;
     }
-    // Successful run — clear the per-voice failure counter (#11).
-    // A flaky day no longer accumulates into permanent auto-disable.
-    recordVoiceSuccess({
-      lineage: candidate.lineage as CliLineage,
-      model: candidate.models?.[0],
-    }).catch((trackErr: unknown) => {
-      console.error('[chorus] recordVoiceSuccess failed:', trackErr);
-    });
     return verdictFromReviewerText(result.content);
   } catch {
     // Timed out or watcher errored — no valid answer produced.
