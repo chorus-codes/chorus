@@ -20,6 +20,7 @@
 
 import {
   spawn as spawnChild,
+  spawnSync,
   type ChildProcessWithoutNullStreams,
 } from 'child_process';
 import * as fs from 'fs';
@@ -27,6 +28,36 @@ import * as os from 'os';
 import * as path from 'path';
 import type { AgentEvent } from './agents/types.js';
 import { cliPaths } from '../lib/cli-paths.js';
+
+// Cache binary→path resolutions. `where` shells out — don't repeat per spawn.
+const binaryPathCache = new Map<string, string>();
+
+/**
+ * Resolve a binary name to a full path with extension. Critical on Windows
+ * where Node's spawn won't resolve `.cmd` shims (npm globals like
+ * claude.cmd, codex.cmd, gemini.cmd) without shell:true (DEP0190 in
+ * Node 22+). On Unix returns the name unchanged — spawn handles PATH
+ * resolution natively for ELF/script files with shebangs.
+ */
+function resolveBinaryPath(command: string): string {
+  if (process.platform !== 'win32') return command;
+  if (path.isAbsolute(command)) return command;
+  const cached = binaryPathCache.get(command);
+  if (cached) return cached;
+  const r = spawnSync('where', [command], { encoding: 'utf-8', timeout: 3000 });
+  if (r.status !== 0 || !r.stdout) {
+    binaryPathCache.set(command, command);
+    return command; // fallback — daemon will surface ENOENT cleanly.
+  }
+  // npm globals on Windows ship two siblings: `claude` (Bash shim, not
+  // executable by Node spawn) and `claude.cmd` (Windows shim). `where`
+  // returns both; we must pick the .cmd/.bat/.exe variant for Node.
+  const lines = r.stdout.split(/\r?\n/).map((s) => s.trim()).filter(Boolean);
+  const preferred = lines.find((l) => /\.(cmd|bat|exe)$/i.test(l));
+  const resolved = preferred ?? lines[0] ?? command;
+  binaryPathCache.set(command, resolved);
+  return resolved;
+}
 
 /**
  * Cached merged PATH for subprocess spawns. Populated by the daemon
@@ -253,10 +284,23 @@ export function spawnHeadless(opts: SpawnHeadlessOptions): HeadlessRun {
   const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   const startedAt = Date.now();
 
-  const child: ChildProcessWithoutNullStreams = spawnChild(opts.command, [...opts.args], {
+  // Windows CLIs ship as .cmd shims (npm globals: claude.cmd, codex.cmd,
+  // gemini.cmd). Node 18.20+/20.x/22+ added CVE-2024-27980 mitigations that
+  // *block* spawn of .cmd/.bat without shell:true (EINVAL). We:
+  //   1. Resolve to the full .cmd path via `where` (cached) so PATH lookups
+  //      always pick the .cmd shim, never the Bash sibling.
+  //   2. Set shell:true ONLY on Windows. DEP0190 fires informationally; our
+  //      args are fixed CLI flags (not user-controlled) so the shell-escaping
+  //      class of risks doesn't apply here.
+  // On Unix this is a no-op: spawn handles ELF/shebang scripts natively.
+  const isWindows = process.platform === 'win32';
+  const resolvedCommand = resolveBinaryPath(opts.command);
+
+  const child: ChildProcessWithoutNullStreams = spawnChild(resolvedCommand, [...opts.args], {
     cwd: opts.cwd,
     env: spawnEnv(opts.env),
     stdio: ['pipe', 'pipe', 'pipe'],
+    shell: isWindows,
   });
 
   if (child.pid !== undefined) {
