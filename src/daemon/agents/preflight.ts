@@ -82,7 +82,12 @@ export function preTrustCodexWorkspace(codexHome: string, cwd: string): void {
     fs.mkdirSync(codexHome, { recursive: true });
   }
 
-  const marker = `[projects."${cwd}"]`;
+  // TOML basic strings (double-quoted) interpret \U/\u as unicode escapes.
+  // Windows paths like "C:\Users\..." trip "too few unicode value digits"
+  // when codex parses its config. Both Codex and Node accept forward slashes
+  // on Windows, so we normalize at write time.
+  const normalizedCwd = cwd.replace(/\\/g, '/');
+  const marker = `[projects."${normalizedCwd}"]`;
   if (body.includes(marker)) return; // already present
 
   const block = `\n${marker}\ntrust_level = "trusted"\n`;
