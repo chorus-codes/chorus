@@ -142,3 +142,7 @@ CREATE INDEX IF NOT EXISTS idx_phase_events_chat ON phase_events(chat_id, phase_
 CREATE INDEX IF NOT EXISTS idx_voices_lineage ON voices(lineage);
 CREATE INDEX IF NOT EXISTS idx_voices_provider ON voices(provider);
 CREATE INDEX IF NOT EXISTS idx_voices_source ON voices(source);
+-- Speeds up `WHERE enabled = 0` scans used by `chorus diagnose` voice
+-- health summary. Tiny table today (<200 rows) so the index is mostly
+-- forward-looking, but cheap.
+CREATE INDEX IF NOT EXISTS idx_voices_enabled ON voices(enabled);

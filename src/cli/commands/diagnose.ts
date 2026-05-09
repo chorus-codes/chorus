@@ -22,6 +22,7 @@
  * involves things being broken.
  */
 import type { Command } from 'commander';
+import { spawn } from 'child_process';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
@@ -29,6 +30,43 @@ import { isDaemonHealthy, readDaemonInfo } from '../../lib/daemon-discovery.js';
 import { pkg } from '../shared.js';
 
 const ISSUE_URL = 'https://github.com/chorus-codes/chorus/issues/new';
+
+interface SmokeResult {
+  ok: boolean;
+  exitCode?: number;
+  version?: string;
+  stderrFirstLine?: string;
+  /** Set when the smoke timed out (SIGTERM / SIGKILL from spawn). Distinguishes
+   *  hung CLI from non-zero exit so a paste-in bug report shows "timed out"
+   *  explicitly. Without this, every failure mode renders identically. */
+  timedOut?: boolean;
+}
+
+interface ErroredParticipant {
+  dir: string;
+  lineage: string;
+  model: string | null;
+  errorKind: string;
+  /** Length of the original errorMessage in bytes — useful as a "yes there
+   *  WAS a message" signal without leaking the content. The full message
+   *  lives in the on-disk `_attempts.jsonl`; users can attach that file
+   *  manually if a maintainer needs it. */
+  errorMessageBytes: number;
+}
+
+interface RecentFailedChat {
+  chatId: string;
+  status: string;
+  createdAt: number;
+  erroredParticipants: ErroredParticipant[];
+}
+
+interface VoiceHealth {
+  total: number;
+  autoQuota: string[];
+  autoMissing: string[];
+  userDisabled: number;
+}
 
 interface DiagnoseSnapshot {
   chorus: { cliVersion: string; runningDaemonVersion: string | null; mismatch: boolean };
@@ -42,12 +80,28 @@ interface DiagnoseSnapshot {
   db: { chats: number | string; voices: number | string };
   logs: { daemonTail: string; webTail: string };
   crashes: { count: number; latest: { file: string; preview: string } | null };
-  clis: Array<{ id: string; found: boolean; path?: string; reason?: string }>;
+  clis: Array<{ id: string; found: boolean; path?: string; reason?: string; smoke?: SmokeResult }>;
+  voiceHealth: VoiceHealth;
+  recentFailedChats: RecentFailedChat[];
 }
 
 function abbreviateHome(p: string): string {
   const home = os.homedir();
   return p.startsWith(home) ? '~' + p.slice(home.length) : p;
+}
+
+/**
+ * Redact every occurrence of $HOME embedded inside a free-form string —
+ * used for spawn() error messages and process stderr where `abbreviateHome`
+ * can't help because the path doesn't start at offset 0 (e.g.
+ * `spawn /home/alice/foo ENOENT`).
+ */
+function redactHomePaths(s: string): string {
+  const home = os.homedir();
+  if (!home) return s;
+  // Escape for regex use — Node's homedir is a literal path, but be safe.
+  const escaped = home.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return s.replace(new RegExp(escaped, 'g'), '~');
 }
 
 /**
@@ -191,6 +245,205 @@ function tailFile(p: string, lines: number): string {
   }
 }
 
+/**
+ * Run `<bin> --version` with a 2s wall clock and capture exit code +
+ * a single line of useful output. Detects the case where the CLI is
+ * present at the expected path but explodes on invocation (auth
+ * missing, missing native dep, broken symlink target). That class of
+ * failure is invisible in pure path-detection — it's the most common
+ * reason a CLI shows up as ✓ in the bundle but a chat against it
+ * silently fails.
+ *
+ * Async (`spawn` + Promise) so a 5-CLI fleet smokes concurrently
+ * instead of sequentially blocking for 5×2s on the worst case.
+ *
+ * Privacy: any string that lands in the bundle runs through
+ * `abbreviateHome()` so $HOME paths from spawn errors / process stderr
+ * don't leak the reporter's username or workspace layout.
+ *
+ * Timeout: hard SIGKILL after 2s — a hung wrapper that traps SIGTERM
+ * can't extend the deadline. The timeout case is surfaced with an
+ * explicit `timedOut: true` flag so the report says "timed out"
+ * instead of being indistinguishable from a non-zero exit.
+ */
+export function smokeOneCli(bin: string): Promise<SmokeResult> {
+  return new Promise<SmokeResult>((resolve) => {
+    let stdout = '';
+    let stderr = '';
+    let settled = false;
+    const settle = (r: SmokeResult): void => {
+      if (settled) return;
+      settled = true;
+      resolve(r);
+    };
+    let child: ReturnType<typeof spawn>;
+    try {
+      child = spawn(bin, ['--version'], { windowsHide: true });
+    } catch (err) {
+      settle({
+        ok: false,
+        exitCode: -1,
+        stderrFirstLine: redactHomePaths(
+          (err instanceof Error ? err.message : String(err)).slice(0, 200),
+        ),
+      });
+      return;
+    }
+    const timer = setTimeout(() => {
+      // Hard kill — SIGTERM can be trapped by wrapper scripts.
+      try {
+        child.kill('SIGKILL');
+      } catch {
+        /* already dead */
+      }
+      settle({
+        ok: false,
+        exitCode: -1,
+        timedOut: true,
+        stderrFirstLine: 'timed out after 2s',
+      });
+    }, 2_000);
+
+    child.stdout?.on('data', (d: Buffer) => {
+      // Cap at 4 KiB — a `--version` printing megabytes is misbehaving
+      // and we don't want the bundle to bloat from it.
+      if (stdout.length < 4096) stdout += d.toString('utf-8');
+    });
+    child.stderr?.on('data', (d: Buffer) => {
+      if (stderr.length < 4096) stderr += d.toString('utf-8');
+    });
+    child.on('error', (err) => {
+      clearTimeout(timer);
+      settle({
+        ok: false,
+        exitCode: -1,
+        stderrFirstLine: redactHomePaths(
+          err.message.split('\n')[0]?.slice(0, 200) ?? '',
+        ),
+      });
+    });
+    child.on('close', (code, signal) => {
+      clearTimeout(timer);
+      if (code === 0) {
+        // Some CLIs print version on stdout, some on stderr.
+        const first =
+          stdout.split('\n').find((l) => l.trim()) ||
+          stderr.split('\n').find((l) => l.trim()) ||
+          '';
+        settle({ ok: true, exitCode: 0, version: first.trim().replace(/^v/, '') });
+        return;
+      }
+      if (signal) {
+        // External signal (OOM-killer, unrelated kill) — distinguish
+        // from non-zero exit.
+        settle({
+          ok: false,
+          exitCode: -1,
+          timedOut: signal === 'SIGKILL' || signal === 'SIGTERM' || undefined,
+          stderrFirstLine: `signalled: ${signal}`,
+        });
+        return;
+      }
+      const firstLine = (stderr + stdout)
+        .split('\n')
+        .find((l) => l.trim())
+        ?.trim()
+        .slice(0, 200);
+      settle({
+        ok: false,
+        exitCode: code ?? -1,
+        stderrFirstLine: firstLine ? redactHomePaths(firstLine) : undefined,
+      });
+    });
+  });
+}
+
+/**
+ * Read the LAST line of a participant's `_attempts.jsonl` and parse it.
+ * The reviewer writes one row per failed attempt in the run's `finally`
+ * block; the last row is the most recent failure for that slot —
+ * exactly the field a bug reporter needs to see (errorKind + length of
+ * errorMessage). Tolerant of malformed lines because the file is
+ * append-only and a partial write can leave a torn tail.
+ *
+ * **Privacy**: `errorMessage` is exposed as `errorMessageBytes` only —
+ * raw error strings from LLM APIs frequently echo the user's prompt,
+ * template content, file paths, or provider response excerpts back to
+ * the caller, and `chorus diagnose` output is meant to be pasted into
+ * public bug reports. The on-disk JSONL still has the full message;
+ * users can attach that file manually if a maintainer needs more.
+ */
+export function readLatestAttempt(file: string): {
+  errorKind: string;
+  errorMessageBytes: number;
+  lineage: string;
+  model: string | null;
+} | null {
+  try {
+    if (!fs.existsSync(file)) return null;
+    const raw = fs.readFileSync(file, 'utf-8');
+    const lines = raw.split('\n').filter((l) => l.trim());
+    for (let i = lines.length - 1; i >= 0; i--) {
+      try {
+        const obj = JSON.parse(lines[i]) as {
+          errorKind?: unknown;
+          errorMessage?: unknown;
+          lineage?: unknown;
+          model?: unknown;
+        };
+        if (typeof obj.errorKind === 'string' && typeof obj.errorMessage === 'string') {
+          return {
+            errorKind: obj.errorKind,
+            errorMessageBytes: obj.errorMessage.length,
+            lineage: typeof obj.lineage === 'string' ? obj.lineage : 'unknown',
+            model: typeof obj.model === 'string' ? obj.model : null,
+          };
+        }
+      } catch {
+        /* try the previous line */
+      }
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Walk a chat's per-round directories and surface every participant
+ * whose `_attempts.jsonl` shows a failure. A reviewer that succeeded
+ * writes no JSONL — the file's mere presence is the signal.
+ */
+function gatherErroredParticipants(chatId: string): ErroredParticipant[] {
+  const chatDir = path.join(os.homedir(), '.chorus', 'chats', chatId);
+  if (!fs.existsSync(chatDir)) return [];
+  const out: ErroredParticipant[] = [];
+  try {
+    const rounds = fs.readdirSync(chatDir).filter((n) => n.startsWith('round-'));
+    for (const r of rounds) {
+      const rDir = path.join(chatDir, r);
+      if (!fs.statSync(rDir).isDirectory()) continue;
+      for (const part of fs.readdirSync(rDir)) {
+        const partDir = path.join(rDir, part);
+        const attempts = path.join(partDir, '_attempts.jsonl');
+        const latest = readLatestAttempt(attempts);
+        if (latest) {
+          out.push({
+            dir: `${r}/${part}`,
+            lineage: latest.lineage,
+            model: latest.model,
+            errorKind: latest.errorKind,
+            errorMessageBytes: latest.errorMessageBytes,
+          });
+        }
+      }
+    }
+  } catch {
+    /* missing dir, permission error — best-effort */
+  }
+  return out;
+}
+
 async function gather(): Promise<DiagnoseSnapshot> {
   const chorusDir = path.join(os.homedir(), '.chorus');
   const cliVersion = pkg.version;
@@ -295,18 +548,86 @@ async function gather(): Promise<DiagnoseSnapshot> {
 
   // CLI detection — reuse the same module doctor uses, but emit a
   // compact summary (no PATH visibility section; that's doctor's job).
+  // Also smoke each detected bin (`<bin> --version`) so the bundle
+  // captures CLIs that resolve on PATH but explode on invocation —
+  // the most common "✓ detected but chats fail silently" case.
+  // Smokes run in parallel via Promise.all-around-Promise.resolve so a
+  // 5-CLI fleet doesn't block diagnose for 5×2s = 10s on the worst case.
   let clis: DiagnoseSnapshot['clis'] = [];
   try {
     const { detectAllClis } = await import('../../lib/cli-detect.js');
     const found = detectAllClis(true);
-    clis = found.map((d) => ({
+    const smokes: Array<SmokeResult | undefined> = await Promise.all(
+      found.map((d) => (d.found && d.path ? smokeOneCli(d.path) : Promise.resolve(undefined))),
+    );
+    clis = found.map((d, i) => ({
       id: d.id,
       found: d.found,
       path: d.path ? abbreviateHome(d.path) : undefined,
       reason: d.reason,
+      smoke: smokes[i],
     }));
   } catch {
     /* detection module load failed — leave empty */
+  }
+
+  // Voice health — count voices by disabled_reason. Surfaces the
+  // auto-disable signal from the voice-failure-tracker (chorus-106)
+  // so reporters know when chorus has silently sidelined a model.
+  // Best-effort: same DB connection as the chats/voices counts above.
+  let voiceHealth: VoiceHealth = { total: 0, autoQuota: [], autoMissing: [], userDisabled: 0 };
+  try {
+    const { getDb } = await import('../../lib/db/connection.js');
+    const db = await getDb();
+    const total = await db.execute('SELECT COUNT(*) AS n FROM voices');
+    const disabled = await db.execute(
+      "SELECT id, disabled_reason FROM voices WHERE enabled = 0",
+    );
+    const autoQuota: string[] = [];
+    const autoMissing: string[] = [];
+    let userDisabled = 0;
+    for (const row of disabled.rows as unknown as Array<{
+      id: string;
+      disabled_reason: string | null;
+    }>) {
+      if (row.disabled_reason === 'auto_quota') autoQuota.push(row.id);
+      else if (row.disabled_reason === 'auto_missing') autoMissing.push(row.id);
+      else userDisabled++;
+    }
+    voiceHealth = {
+      total: Number((total.rows[0] as unknown as { n: number }).n),
+      autoQuota,
+      autoMissing,
+      userDisabled,
+    };
+  } catch {
+    /* DB unreachable / schema older — leave defaults */
+  }
+
+  // Recent failed chats — last 5 chats whose status is non-terminal-OK.
+  // Joined to per-participant `_attempts.jsonl` so the bundle shows the
+  // ACTUAL failure reason (errorKind + first line of errorMessage)
+  // instead of just "this chat failed". Cuts the most common triage
+  // roundtrip ("what specifically happens when you run it?").
+  let recentFailedChats: RecentFailedChat[] = [];
+  try {
+    const { getDb } = await import('../../lib/db/connection.js');
+    const db = await getDb();
+    const rows = await db.execute(
+      `SELECT id, status, created_at FROM chats
+       WHERE status IN ('failed', 'blocked', 'cancelled')
+       ORDER BY created_at DESC LIMIT 5`,
+    );
+    recentFailedChats = (
+      rows.rows as unknown as Array<{ id: string; status: string; created_at: number }>
+    ).map((r) => ({
+      chatId: r.id,
+      status: r.status,
+      createdAt: r.created_at,
+      erroredParticipants: gatherErroredParticipants(r.id),
+    }));
+  } catch {
+    /* DB unreachable or chats schema mismatch — leave empty */
   }
 
   return {
@@ -344,6 +665,8 @@ async function gather(): Promise<DiagnoseSnapshot> {
     },
     crashes: { count: crashCount, latest: latestCrash },
     clis,
+    voiceHealth,
+    recentFailedChats,
   };
 }
 
@@ -381,11 +704,65 @@ export function formatReport(s: DiagnoseSnapshot): string {
     lines.push('(detection module failed to load)');
   } else {
     for (const c of s.clis) {
-      lines.push(
-        c.found
-          ? `  ✓ ${c.id.padEnd(14)} ${c.path ?? ''}`
-          : `  ✗ ${c.id.padEnd(14)} not found${c.reason ? ` — ${c.reason}` : ''}`,
-      );
+      if (!c.found) {
+        lines.push(`  ✗ ${c.id.padEnd(14)} not found${c.reason ? ` — ${c.reason}` : ''}`);
+        continue;
+      }
+      lines.push(`  ✓ ${c.id.padEnd(14)} ${c.path ?? ''}`);
+      if (c.smoke) {
+        if (c.smoke.ok) {
+          lines.push(`      smoke: ok${c.smoke.version ? ` (v${c.smoke.version})` : ''}`);
+        } else if (c.smoke.timedOut) {
+          const detail = c.smoke.stderrFirstLine ? ` — ${c.smoke.stderrFirstLine}` : '';
+          lines.push(`      ✗ smoke timed out (>2s)${detail}`);
+        } else {
+          const detail = c.smoke.stderrFirstLine
+            ? ` — ${c.smoke.stderrFirstLine}`
+            : '';
+          lines.push(
+            `      ✗ smoke failed (exit ${c.smoke.exitCode ?? '?'})${detail}`,
+          );
+        }
+      }
+    }
+  }
+  lines.push('');
+  lines.push('## Voice health');
+  lines.push(`total:           ${s.voiceHealth.total}`);
+  lines.push(
+    `auto-disabled (quota):    ${s.voiceHealth.autoQuota.length}` +
+      (s.voiceHealth.autoQuota.length > 0
+        ? `  → ${s.voiceHealth.autoQuota.join(', ')}`
+        : ''),
+  );
+  lines.push(
+    `auto-disabled (missing):  ${s.voiceHealth.autoMissing.length}` +
+      (s.voiceHealth.autoMissing.length > 0
+        ? `  → ${s.voiceHealth.autoMissing.join(', ')}`
+        : ''),
+  );
+  lines.push(`user-disabled:            ${s.voiceHealth.userDisabled}`);
+  lines.push('');
+  lines.push('## Recent failed chats');
+  if (s.recentFailedChats.length === 0) {
+    lines.push('(none)');
+  } else {
+    for (const c of s.recentFailedChats) {
+      lines.push(`  ${c.chatId}  status=${c.status}`);
+      if (c.erroredParticipants.length === 0) {
+        lines.push('      (no errored participants — see daemon.log)');
+      } else {
+        for (const p of c.erroredParticipants) {
+          const modelPart = p.model ? ` model=${p.model}` : '';
+          lines.push(`      ${p.dir}  lineage=${p.lineage}${modelPart}`);
+          // errorKind is a controlled vocabulary (auth_error,
+          // quota_exhausted, network, parse, timeout, ...). The full
+          // errorMessage stays on disk in `_attempts.jsonl` — we only
+          // surface the byte length so the reporter can attach the
+          // file if a maintainer needs more.
+          lines.push(`        ${p.errorKind} (errorMessage: ${p.errorMessageBytes} bytes on disk)`);
+        }
+      }
     }
   }
   lines.push('');
@@ -441,4 +818,6 @@ export const _testing = {
   abbreviateHome,
   resolveBinPath,
   filterBenignNoise,
+  smokeOneCli,
+  readLatestAttempt,
 };

@@ -177,6 +177,7 @@ async function initDb(): Promise<Client> {
   await db.execute('CREATE INDEX IF NOT EXISTS idx_voices_lineage ON voices(lineage)');
   await db.execute('CREATE INDEX IF NOT EXISTS idx_voices_provider ON voices(provider)');
   await db.execute('CREATE INDEX IF NOT EXISTS idx_voices_source ON voices(source)');
+  await db.execute('CREATE INDEX IF NOT EXISTS idx_voices_enabled ON voices(enabled)');
 
   // disabled_reason — added so the seed can distinguish user-intent toggles
   // from transient auto-disables on missed CLI detection. Without this the
