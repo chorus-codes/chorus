@@ -23,11 +23,11 @@ describe('port utils process lookup', () => {
     expect(findPidsOnPort(5050)).toEqual([]);
     expect(childProcess.execSync).toHaveBeenCalledWith(
       'ss -ltnp \'sport = :5050\' 2>/dev/null',
-      expect.objectContaining({ timeout: 1000 }),
+      expect.objectContaining({ timeout: 3000 }),
     );
     expect(childProcess.execSync).toHaveBeenCalledWith(
       'lsof -nP -iTCP:5050 -sTCP:LISTEN -t 2>/dev/null',
-      expect.objectContaining({ timeout: 1000 }),
+      expect.objectContaining({ timeout: 3000 }),
     );
   });
 
@@ -42,12 +42,12 @@ describe('port utils process lookup', () => {
     expect(childProcess.execFileSync).toHaveBeenCalledWith(
       'sudo',
       ['-n', 'ss', '-ltnp', 'sport = :5050'],
-      expect.objectContaining({ timeout: 1000 }),
+      expect.objectContaining({ timeout: 3000 }),
     );
     expect(childProcess.execFileSync).toHaveBeenCalledWith(
       'sudo',
       ['-n', 'lsof', '-nP', '-iTCP:5050', '-sTCP:LISTEN', '-t'],
-      expect.objectContaining({ timeout: 1000 }),
+      expect.objectContaining({ timeout: 3000 }),
     );
   });
 });

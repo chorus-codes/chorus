@@ -125,6 +125,29 @@ describe('recordVoiceFailure (DB)', () => {
     expect(row?.enabled).toBe(true);
   });
 
+  it('failures with resetAt do not increment the counter (cross-poison guard)', async () => {
+    // Regression for chorus self-review finding (cli-3): a transient
+    // rate-limit (hasResetAt=true) followed by a permanent failure
+    // (hasResetAt=false) must require TWO permanent strikes before
+    // disable, not one. If hasResetAt=true bumped the counter, the
+    // first permanent strike would already be at threshold.
+    await seedGeminiProVoice();
+    await recordVoiceFailure({ lineage: 'google', model: 'gemini-3.1-pro-preview', hasResetAt: true });
+    await recordVoiceFailure({ lineage: 'google', model: 'gemini-3.1-pro-preview', hasResetAt: true });
+    // Counter should still be 0 — neither strike was a permanent failure.
+    const counter = await settings.get(_testing.COUNTER_KEY('gemini-cli:gemini-3.1-pro-preview'));
+    expect(counter == null || counter === 0).toBe(true);
+    // First permanent strike — must NOT disable.
+    const first = await recordVoiceFailure({
+      lineage: 'google',
+      model: 'gemini-3.1-pro-preview',
+      hasResetAt: false,
+    });
+    expect(first.disabled).toBe(false);
+    const row = await voices.getById('gemini-cli:gemini-3.1-pro-preview');
+    expect(row?.enabled).toBe(true);
+  });
+
   it('counter resets on disable so a future re-enable starts clean', async () => {
     await seedGeminiProVoice();
     await recordVoiceFailure({ lineage: 'google', model: 'gemini-3.1-pro-preview', hasResetAt: false });

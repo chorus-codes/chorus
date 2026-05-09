@@ -91,6 +91,15 @@ export async function recordVoiceFailure(input: {
   const voice = await resolveVoice(input.lineage, input.model);
   if (!voice) return { disabled: false, voiceId: null };
 
+  // Skip the counter entirely when the upstream promised recovery.
+  // True rate limits should not contribute to the strike count —
+  // otherwise a transient daily-quota hit + a later permanent
+  // failure would trip the threshold on the first permanent strike
+  // instead of the second.
+  if (input.hasResetAt) {
+    return { disabled: false, voiceId: voice.id };
+  }
+
   const key = COUNTER_KEY(voice.id);
   const raw = await settings.get(key);
   const previous = typeof raw === 'number' && Number.isFinite(raw) ? raw : 0;
