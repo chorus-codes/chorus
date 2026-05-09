@@ -75,11 +75,16 @@ export const geminiShim: AgentShim = {
    */
   runHeadless(opts: HeadlessSpawnOptions): AsyncIterable<AgentEvent> {
     // -p needs a non-empty value to flip gemini into non-interactive mode.
-    // The single-space placeholder is harmless once stdin carries the real
-    // prompt (gemini concatenates them with the stdin content first).
+    // Windows note: when daemon spawns with shell:true (required for .cmd
+    // shims, see headless.ts), Node concatenates argv with spaces and the
+    // shell collapses runs of whitespace — the original placeholder ' '
+    // got eaten and gemini parsed --output-format as the -p value, then
+    // exited with help. Use a non-whitespace placeholder. The trailing
+    // character on the prompt is harmless: gemini appends it after the
+    // stdin payload, which our reviewers ignore as content noise.
     const args = [
       '-p',
-      ' ',
+      '_',
       '--output-format',
       'stream-json',
       '--skip-trust',
