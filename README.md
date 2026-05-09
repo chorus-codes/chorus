@@ -112,6 +112,8 @@ expects regardless of how you installed.
 > chorus, get a second opinion on this function from claude + gemini
 ```
 
+**Codex headless note:** `codex exec` blocks all MCP tool calls under any `approval_policy` setting. To use Chorus from `codex exec` (scripted / CI usage), pass `--dangerously-bypass-approvals-and-sandbox`. Interactive `codex` (TUI) prompts the user normally and works without that flag. (Tracked in [#16](https://github.com/chorus-codes/chorus/issues/16).)
+
 Or invoke a specific MCP tool directly — every CLI uses the same name (`chorus`) and exposes nine tools:
 
 | Tool | What it does |

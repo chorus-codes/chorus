@@ -56,6 +56,7 @@ export async function runConnect(orchestrator?: string): Promise<void> {
     const statuses = listOrchestrators();
     const promptsOnce: string[] = [];
     const inheritsGlobal: string[] = [];
+    let codexConnected = false;
 
     for (const step of result.steps) {
       if (!step.detected) {
@@ -78,6 +79,7 @@ export async function runConnect(orchestrator?: string): Promise<void> {
       const status = statuses.find((s) => s.name === step.name);
       if (status?.firstCallBehavior === 'prompts_once') promptsOnce.push(step.label);
       if (status?.firstCallBehavior === 'inherits_global') inheritsGlobal.push(step.label);
+      if (step.name === 'codex' && !step.error) codexConnected = true;
     }
 
     if (!result.anyConnected) {
@@ -100,6 +102,13 @@ export async function runConnect(orchestrator?: string): Promise<void> {
       console.log('');
       console.log(`${inheritsGlobal.join(', ')} use a global approval policy — whether tool calls`);
       console.log('prompt depends on your existing config (we don\'t override it).');
+    }
+    if (codexConnected) {
+      console.log('');
+      console.log('Codex headless note: `codex exec` blocks all MCP tool calls under any');
+      console.log('approval_policy except `--dangerously-bypass-approvals-and-sandbox`.');
+      console.log('Interactive `codex` (TUI) prompts normally and works fine. Use the bypass');
+      console.log('flag for scripted/CI usage. See https://github.com/chorus-codes/chorus/issues/16.');
     }
   } catch (err) {
     console.error(

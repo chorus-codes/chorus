@@ -21,7 +21,7 @@ function getCodexStatus(): OrchestratorStatus {
     connected,
     approvedTools: connected ? 1 : 0,
     totalTools: 1,
-    note: "Registers Chorus as an MCP server in ~/.codex/config.toml. Whether tool calls prompt depends on your codex `approval_policy` setting (we don't change it).",
+    note: "Registers Chorus as an MCP server in ~/.codex/config.toml. Note: `codex exec` (headless mode) blocks MCP tool calls under any `approval_policy` setting except when run with `--dangerously-bypass-approvals-and-sandbox`. Interactive `codex` (TUI) prompts the user normally. See https://github.com/chorus-codes/chorus/issues/16.",
     supported: detected,
     firstCallBehavior: 'inherits_global',
   };
