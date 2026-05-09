@@ -12,13 +12,25 @@ const VoiceRowSchema = z.object({
   input_cost_per_mtok: z.number().nullable(),
   output_cost_per_mtok: z.number().nullable(),
   enabled: z.coerce.boolean(),
-  disabled_reason: z.enum(['user', 'auto_missing']).nullable().optional().default(null),
+  disabled_reason: z.enum(['user', 'auto_missing', 'auto_quota']).nullable().optional().default(null),
   created_at: z.number().int(),
   updated_at: z.number().int(),
 });
 
 export type VoiceRow = z.infer<typeof VoiceRowSchema>;
-export type VoiceDisabledReason = 'user' | 'auto_missing';
+/**
+ * Why a voice is disabled.
+ *
+ * - `user` — toggled off via the cockpit Connect page. Never auto-restored.
+ * - `auto_missing` — CLI was not detected on a daemon boot. Auto-restored
+ *   when the CLI is detected again on a future boot.
+ * - `auto_quota` — repeated quota_exhausted failures with no resetAt
+ *   (i.e. the upstream did not promise recovery). Issued for cases like
+ *   "Pro Gemini model on a Flash-only account" where the model fails
+ *   forever for that account. User can re-enable manually if they
+ *   believe the account changed; chorus does not auto-restore.
+ */
+export type VoiceDisabledReason = 'user' | 'auto_missing' | 'auto_quota';
 
 export interface VoiceUpsertInput {
   id: string;

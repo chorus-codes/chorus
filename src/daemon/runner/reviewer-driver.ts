@@ -2,6 +2,7 @@ import fs from 'fs';
 import path from 'path';
 import { DEFAULT_TMUX_PHASE_TIMEOUT_MS, type StandardPhase } from '../../lib/template-schema.js';
 import { recordHealth, kindToStatus, type CliLineage } from '../../lib/cli-health.js';
+import { recordVoiceFailure, recordVoiceSuccess } from '../../lib/voice-failure-tracker.js';
 import { precheckLineage } from '../../lib/cli-precheck.js';
 import { personas } from '../../lib/db/index.js';
 import { getPermissions } from '../../lib/settings/permissions.js';
@@ -564,6 +565,38 @@ async function runReviewer(
           }).catch((healthErr: unknown) => {
             console.error(`[chorus] recordHealth failed for ${candidate.lineage}:`, healthErr);
           });
+          // Per-voice failure tracking (#11). Only count quota_exhausted
+          // — other error kinds (mcp_handshake_failed, network blips)
+          // shouldn't accumulate against the voice's strikes counter.
+          if (err.kind === 'quota_exhausted') {
+            recordVoiceFailure({
+              lineage: candidate.lineage as CliLineage,
+              model: candidate.models?.[0],
+              hasResetAt: typeof err.resetAt === 'number',
+            })
+              .then((result) => {
+                if (result.disabled) {
+                  onEvent({
+                    chatId,
+                    type: 'cli_warning',
+                    payload: {
+                      phaseId: phase.id,
+                      round,
+                      role: 'reviewer',
+                      agent: `${agentName}-${reviewerIdx}`,
+                      reason: 'voice_auto_disabled',
+                      voiceId: result.voiceId,
+                      detail:
+                        'Voice auto-disabled after persistent quota_exhausted with no reset window. Re-enable on the Connect page if your account has changed.',
+                    },
+                    ts: Date.now(),
+                  });
+                }
+              })
+              .catch((trackErr: unknown) => {
+                console.error('[chorus] recordVoiceFailure failed:', trackErr);
+              });
+          }
           onEvent({
             chatId,
             type: 'cli_error',
@@ -592,6 +625,14 @@ async function runReviewer(
       // Watcher resolved on timeout/silence with no real answer.
       return null;
     }
+    // Successful run — clear the per-voice failure counter (#11).
+    // A flaky day no longer accumulates into permanent auto-disable.
+    recordVoiceSuccess({
+      lineage: candidate.lineage as CliLineage,
+      model: candidate.models?.[0],
+    }).catch((trackErr: unknown) => {
+      console.error('[chorus] recordVoiceSuccess failed:', trackErr);
+    });
     return verdictFromReviewerText(result.content);
   } catch {
     // Timed out or watcher errored — no valid answer produced.
