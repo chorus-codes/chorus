@@ -41,7 +41,11 @@ const binaryPathCache = new Map<string, string>();
  */
 function resolveBinaryPath(command: string): string {
   if (process.platform !== 'win32') return command;
-  if (path.isAbsolute(command)) return command;
+  // Use the Windows-specific isAbsolute (`path.win32`) so absolute
+  // detection works the same on a real Windows host AND on a Linux CI
+  // run where the test stubs `process.platform = 'win32'` but the
+  // top-level `path` module is still POSIX.
+  if (path.win32.isAbsolute(command)) return command;
   const cached = binaryPathCache.get(command);
   if (cached) return cached;
   const r = spawnSync('where', [command], { encoding: 'utf-8', timeout: 3000 });

@@ -130,7 +130,7 @@ describe('resolveBinaryPath (via spawnHeadless) — Unix branch', () => {
 
     const spawnSyncSpy = vi.fn();
     const { child, triggerExit } = makeFakeChild();
-    const spawnSpy = vi.fn(() => child);
+    const spawnSpy = vi.fn((_cmd: string, _args: string[], _opts?: object) => child);
 
     vi.doMock('node:child_process', () => ({
       spawn: spawnSpy,
@@ -174,7 +174,7 @@ describe('resolveBinaryPath (via spawnHeadless) — Windows branch', () => {
       signal: null,
     });
     const { child, triggerExit } = makeFakeChild();
-    const spawnSpy = vi.fn(() => child);
+    const spawnSpy = vi.fn((_cmd: string, _args: string[], _opts?: object) => child);
 
     vi.doMock('node:child_process', () => ({
       spawn: spawnSpy,
@@ -271,7 +271,7 @@ describe('resolveBinaryPath (via spawnHeadless) — Windows branch', () => {
       signal: null,
     });
     const { child, triggerExit } = makeFakeChild();
-    const spawnSpy = vi.fn(() => child);
+    const spawnSpy = vi.fn((_cmd: string, _args: string[], _opts?: object) => child);
 
     vi.doMock('node:child_process', () => ({
       spawn: spawnSpy,
@@ -309,7 +309,7 @@ describe('resolveBinaryPath (via spawnHeadless) — Windows branch', () => {
       signal: null,
     });
     const { child, triggerExit } = makeFakeChild();
-    const spawnSpy = vi.fn(() => child);
+    const spawnSpy = vi.fn((_cmd: string, _args: string[], _opts?: object) => child);
 
     vi.doMock('node:child_process', () => ({
       spawn: spawnSpy,
@@ -340,7 +340,7 @@ describe('resolveBinaryPath (via spawnHeadless) — Windows branch', () => {
 
     const spawnSyncSpy = vi.fn();
     const { child, triggerExit } = makeFakeChild();
-    const spawnSpy = vi.fn(() => child);
+    const spawnSpy = vi.fn((_cmd: string, _args: string[], _opts?: object) => child);
 
     vi.doMock('node:child_process', () => ({
       spawn: spawnSpy,
@@ -378,7 +378,7 @@ describe('spawnHeadless shell:true gating', () => {
 
     const spawnSyncSpy = vi.fn();
     const { child, triggerExit } = makeFakeChild();
-    const spawnSpy = vi.fn(() => child);
+    const spawnSpy = vi.fn((_cmd: string, _args: string[], _opts?: object) => child);
 
     vi.doMock('node:child_process', () => ({
       spawn: spawnSpy,
