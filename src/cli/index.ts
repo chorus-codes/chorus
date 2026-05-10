@@ -7,6 +7,7 @@ import { resolveCockpitUrl } from '../lib/daemon-discovery.js';
 import { registerDiagnoseCommand } from './commands/diagnose.js';
 import { registerDoctorCommand } from './commands/doctor.js';
 import { registerInitCommand } from './commands/init.js';
+import { registerQuickstartCommand } from './commands/quickstart.js';
 import { registerStartCommand } from './commands/start.js';
 import { registerStatusCommand } from './commands/status.js';
 import { registerStopCommand } from './commands/stop.js';
@@ -63,6 +64,7 @@ registerStatusCommand(program);
 registerDoctorCommand(program);
 registerDiagnoseCommand(program);
 registerUpdateCommand(program);
+registerQuickstartCommand(program);
 
 program
   .command('ui')
