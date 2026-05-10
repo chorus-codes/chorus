@@ -193,6 +193,46 @@ async function runReviewer(
   const agentName = shim.name;
   const isHttp = isHttpDispatchedShim(shim);
 
+  // Reviewer dir is created BEFORE the precheck so any pre-spawn failure
+  // can still write a `## REVIEWER FAILED` summary to answer.md. Without
+  // this, a precheck-failed slot leaves NO on-disk participant; the
+  // cockpit's enrich-rounds loop then can't reconcile the synthesised
+  // template slot against any real participant, so the card sits at
+  // "Queued — waiting for an open slot." forever (issue #25 — user with
+  // no codex/gemini/kimi installed saw every chat stuck queued).
+  const roundDir = path.join(chatDir, `round-${round}`);
+  const reviewerDir = path.join(roundDir, `reviewer-${agentName}-${reviewerIdx}`);
+  if (!fs.existsSync(reviewerDir)) {
+    fs.mkdirSync(reviewerDir, { recursive: true });
+  }
+  const askFile = path.join(reviewerDir, 'ask.md');
+  const answerFile = path.join(reviewerDir, 'answer.md');
+
+  // Helper: write a `## REVIEWER FAILED` summary to answer.md so the
+  // cockpit's `parseFailureSummary` lifts the slot out of "pending" and
+  // shows the actual error. Same shape `runReviewerHeadless` writes for
+  // post-spawn failures, kept in sync with the parser (kind, lineage,
+  // model, message).
+  const writePreSpawnFailure = (
+    kind: string,
+    message: string,
+    resetAt?: number,
+  ): void => {
+    try {
+      fs.writeFileSync(
+        answerFile,
+        `## REVIEWER FAILED\n\n` +
+          `**Kind:** ${kind}\n` +
+          `**Lineage:** ${candidate.lineage}\n` +
+          `**Model:** ${reviewerModel ?? '(default)'}\n` +
+          (resetAt ? `**Resets:** ${new Date(resetAt).toISOString()}\n` : '') +
+          `\n${message}\n`,
+      );
+    } catch {
+      /* best-effort — diagnostics shouldn't fail the run */
+    }
+  };
+
   // Pre-spawn precheck — same gate as runDoer. A reviewer that fails
   // precheck returns null, which the phase loop already handles by
   // counting it toward the all-reviewers-failed threshold and continuing
@@ -201,6 +241,7 @@ async function runReviewer(
   if (!isHttp) {
     const preRev = await precheckLineage(candidate.lineage as CliLineage);
     if (!preRev.ok) {
+      writePreSpawnFailure(preRev.reason, preRev.message, preRev.resetAt);
       onEvent({
         chatId,
         type: 'cli_warning',
@@ -245,19 +286,13 @@ async function runReviewer(
       // Aborted while waiting for slot — don't proceed. The phase loop
       // counts this reviewer as failed which preserves "all-failed"
       // semantics for the chat-level verdict.
+      writePreSpawnFailure(
+        'cancelled',
+        'Reviewer cancelled while queued for an open CLI slot.',
+      );
       return null;
     }
   }
-
-  const roundDir = path.join(chatDir, `round-${round}`);
-  const reviewerDir = path.join(roundDir, `reviewer-${agentName}-${reviewerIdx}`);
-
-  if (!fs.existsSync(reviewerDir)) {
-    fs.mkdirSync(reviewerDir, { recursive: true });
-  }
-
-  const askFile = path.join(reviewerDir, 'ask.md');
-  const answerFile = path.join(reviewerDir, 'answer.md');
 
   // Outer try/finally — guarantees the cli-semaphore slot is returned
   // on every path: headless's nested try/finally for participantAborts,
