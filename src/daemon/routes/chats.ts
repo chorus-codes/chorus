@@ -309,6 +309,20 @@ export function registerChatRoutes(
         'chat created',
       );
 
+      // Latch the install's first-ever chat-fire timestamp for telemetry
+      // activation analytics. Idempotent — only writes the first time.
+      // Fire-and-forget: a settings-write failure must not block the
+      // chat-create path. Lazy-imported to keep this route's import
+      // graph minimal and tolerant of telemetry-disabled builds.
+      void (async () => {
+        try {
+          const { markFirstChatFired } = await import('../../lib/telemetry.js');
+          await markFirstChatFired();
+        } catch {
+          /* never block chat creation on telemetry */
+        }
+      })();
+
       // Auto-fire the runner. Earlier code left chats inert until a
       // client hit /chats/:id/stream — fine for the cockpit (the run
       // page subscribes on open), but the MCP path (autonomous batch

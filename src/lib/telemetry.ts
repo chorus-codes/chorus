@@ -23,7 +23,7 @@ import { randomUUID } from 'crypto';
 import { settings, getDb } from './db/index.js';
 
 export interface TelemetryPayload {
-  schema: 1;
+  schema: 2;
   installId: string;
   version: string;
   os: string;
@@ -31,10 +31,32 @@ export interface TelemetryPayload {
   node: string;
   daemonUptimeSeconds: number;
   chatsLast24h: number;
+  // Activation-funnel fields (added in schema 2). Pre-launch we tracked
+  // only `chatsLast24h`, which conflates "never fired" with "stopped
+  // firing." With these we can compute time-to-first-chat (TTFC) and
+  // separate "tried once and bounced" from "active for N days."
+  /** First-boot timestamp (ms epoch). Set once per install on first daemon
+   *  start; persisted to `~/.chorus/install-at`. Stable across upgrades. */
+  installAt: number;
+  /** Timestamp (ms epoch) of the install's first-ever chat creation, or
+   *  `null` if no chat has been created yet. Persisted in the settings
+   *  table; latched once. The 30-min activation window analysis depends
+   *  on this. */
+  firstChatFiredAt: number | null;
+  /** Count of voices in the DB with `enabled = 1`. Tells us if the user
+   *  has any usable reviewer at all — the cubed-it (#25) failure mode
+   *  was 4 enabled voices out of 27 with a cross-lineage template that
+   *  couldn't be satisfied. */
+  voicesEnabled: number;
+  /** Count of CLIs detected on PATH at heartbeat time (claude-code,
+   *  codex, gemini, opencode, kimi). Distinguishes "no CLIs installed"
+   *  from "CLIs installed but voices disabled". */
+  clisDetected: number;
 }
 
 const ENDPOINT = 'https://chorus.codes/api/telemetry';
 const SETTINGS_KEY = 'telemetry.enabled';
+const FIRST_CHAT_KEY = 'telemetry.firstChatFiredAt';
 const HEARTBEAT_INTERVAL_MS = 24 * 60 * 60 * 1000;
 const SEND_TIMEOUT_MS = 5_000;
 
@@ -44,6 +66,10 @@ function chorusDir(): string {
 
 function installIdPath(): string {
   return path.join(chorusDir(), 'install-id');
+}
+
+function installAtPath(): string {
+  return path.join(chorusDir(), 'install-at');
 }
 
 function noTelemetryPath(): string {
@@ -166,6 +192,113 @@ export async function countChatsLast24h(now: number = Date.now()): Promise<numbe
 }
 
 /**
+ * Read or mint the install's first-boot timestamp (ms epoch). Persisted
+ * to `~/.chorus/install-at` so it survives daemon restarts AND chorus
+ * upgrades — same lifetime semantics as `install-id`.
+ *
+ * Best-effort: every fs operation is guarded so a read-only $HOME,
+ * ENOSPC, or permission error returns `Date.now()` rather than
+ * propagating the throw to the heartbeat caller. Without this guard
+ * a single fs failure took out the entire telemetry pipeline (not just
+ * the new fields), which the chorus self-review caught as blocking.
+ *
+ * The malformed-file fallback mirrors `getOrCreateInstallId`: if the
+ * file is corrupt, mint a fresh timestamp rather than crashing. The
+ * analytics view simply counts that user as a new cohort starting from
+ * the recovery date.
+ */
+export function getOrCreateInstallAt(): number {
+  try {
+    const dir = chorusDir();
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+    const file = installAtPath();
+    if (fs.existsSync(file)) {
+      const raw = fs.readFileSync(file, 'utf-8').trim();
+      const parsed = parseInt(raw, 10);
+      if (Number.isFinite(parsed) && parsed > 0) return parsed;
+    }
+    const fresh = Date.now();
+    fs.writeFileSync(file, String(fresh) + '\n', { mode: 0o600 });
+    return fresh;
+  } catch {
+    // Read-only $HOME / ENOSPC / permission error / race-on-mkdir —
+    // return an in-memory timestamp so the heartbeat still goes out.
+    // Loses install-age stability across restarts on this host, but
+    // doesn't lose the entire payload.
+    return Date.now();
+  }
+}
+
+/**
+ * Read the persisted "first chat fired at" timestamp. Returns null when
+ * no chat has ever been created against this install. Best-effort: a DB
+ * read failure resolves to null rather than throwing — telemetry must
+ * never block a heartbeat.
+ */
+export async function getFirstChatFiredAt(): Promise<number | null> {
+  try {
+    const raw = await settings.get(FIRST_CHAT_KEY);
+    if (typeof raw === 'number' && Number.isFinite(raw) && raw > 0) return raw;
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Latch the "first chat fired at" timestamp. Idempotent — only writes
+ * the first time. Subsequent calls are no-ops, preserving the original
+ * fire timestamp so TTFC analytics stay stable across re-runs.
+ *
+ * Called from POST /chats once we've confirmed a row was created. Best-
+ * effort write — a DB failure is logged at debug level only and never
+ * blocks the chat-create path.
+ */
+export async function markFirstChatFired(now: number = Date.now()): Promise<void> {
+  try {
+    const existing = await settings.get(FIRST_CHAT_KEY);
+    if (typeof existing === 'number' && existing > 0) return;
+    await settings.set(FIRST_CHAT_KEY, now);
+  } catch {
+    // Best-effort — never let telemetry-write block a chat creation.
+  }
+}
+
+/**
+ * Count voices currently enabled. Idx_voices_enabled covers this; on a
+ * tiny voices table (<200 rows) it's sub-millisecond. Best-effort: a
+ * read failure resolves to 0 so the heartbeat still goes out.
+ */
+export async function countEnabledVoices(): Promise<number> {
+  try {
+    const db = await getDb();
+    const r = await db.execute('SELECT COUNT(*) AS n FROM voices WHERE enabled = 1');
+    const row = r.rows[0];
+    if (!row) return 0;
+    const raw = (row as Record<string, unknown>).n ?? (row as unknown as unknown[])[0];
+    const n = typeof raw === 'bigint' ? Number(raw) : Number(raw ?? 0);
+    return Number.isFinite(n) && n >= 0 ? Math.floor(n) : 0;
+  } catch {
+    return 0;
+  }
+}
+
+/**
+ * Count detected CLIs on PATH (claude-code, codex, gemini, opencode,
+ * kimi). Lazy-imports `cli-detect` so a heartbeat that fires before the
+ * detection module is wired (extremely unlikely; defensive) still works.
+ */
+export async function countDetectedClis(): Promise<number> {
+  try {
+    const { detectAllClis } = await import('./cli-detect.js');
+    const results = detectAllClis(true);
+    return results.filter((d) => d.found).length;
+  } catch {
+    return 0;
+  }
+}
+
+/**
  * Assemble the payload. Pure shape — easy to test against the spec.
  * `version` is read from package.json so a stale literal can't drift;
  * caller supplies it (the daemon already imports its own version).
@@ -180,7 +313,7 @@ export async function buildPayload(args: {
   // the analytics cardinality.
   const nodeMajor = process.versions.node.split('.')[0];
   return {
-    schema: 1,
+    schema: 2,
     installId: getOrCreateInstallId(),
     version: args.version,
     os: process.platform,
@@ -188,6 +321,10 @@ export async function buildPayload(args: {
     node: nodeMajor,
     daemonUptimeSeconds: Math.max(0, Math.floor((now - args.daemonStartedAt) / 1000)),
     chatsLast24h: await countChatsLast24h(now),
+    installAt: getOrCreateInstallAt(),
+    firstChatFiredAt: await getFirstChatFiredAt(),
+    voicesEnabled: await countEnabledVoices(),
+    clisDetected: await countDetectedClis(),
   };
 }
 
@@ -289,10 +426,12 @@ export function startTelemetryHeartbeat(args: {
 // test file can mutate paths without touching `~/.chorus` on the host.
 export const _testing = {
   installIdPath,
+  installAtPath,
   noTelemetryPath,
   chorusDir,
   ENDPOINT,
   SETTINGS_KEY,
+  FIRST_CHAT_KEY,
   HEARTBEAT_INTERVAL_MS,
   SEND_TIMEOUT_MS,
 };

@@ -121,23 +121,35 @@ describe('buildPayload', () => {
       version: '0.7.0',
       daemonStartedAt: Date.now() - 60_000,
     });
+    // Schema 2 added activation-funnel fields (installAt,
+    // firstChatFiredAt, voicesEnabled, clisDetected) so we can measure
+    // time-to-first-chat without the rolling-24h blind spot.
     expect(Object.keys(payload).sort()).toEqual([
       'arch',
       'chatsLast24h',
+      'clisDetected',
       'daemonUptimeSeconds',
+      'firstChatFiredAt',
+      'installAt',
       'installId',
       'node',
       'os',
       'schema',
       'version',
+      'voicesEnabled',
     ]);
-    expect(payload.schema).toBe(1);
+    expect(payload.schema).toBe(2);
     expect(payload.version).toBe('0.7.0');
     expect(payload.daemonUptimeSeconds).toBeGreaterThanOrEqual(60);
     expect(payload.daemonUptimeSeconds).toBeLessThan(120);
     expect(payload.os).toBe(process.platform);
     expect(payload.arch).toBe(process.arch);
     expect(payload.node).toBe(process.versions.node.split('.')[0]);
+    expect(typeof payload.installAt).toBe('number');
+    expect(payload.installAt).toBeGreaterThan(0);
+    expect(payload.firstChatFiredAt).toBeNull();
+    expect(typeof payload.voicesEnabled).toBe('number');
+    expect(typeof payload.clisDetected).toBe('number');
   });
 
   it('does not leak any value containing the home dir path', async () => {
@@ -153,6 +165,81 @@ describe('buildPayload', () => {
       daemonStartedAt: Date.now() + 10_000,
     });
     expect(payload.daemonUptimeSeconds).toBe(0);
+  });
+
+  it('reflects firstChatFiredAt once a chat has been marked', async () => {
+    const { markFirstChatFired } = await import('../src/lib/telemetry');
+    const before = await buildPayload({ version: '0.7.0', daemonStartedAt: Date.now() });
+    expect(before.firstChatFiredAt).toBeNull();
+    const t = Date.now();
+    await markFirstChatFired(t);
+    const after = await buildPayload({ version: '0.7.0', daemonStartedAt: Date.now() });
+    expect(after.firstChatFiredAt).toBe(t);
+    // Idempotent — second call must not overwrite.
+    await markFirstChatFired(t + 5_000);
+    const again = await buildPayload({ version: '0.7.0', daemonStartedAt: Date.now() });
+    expect(again.firstChatFiredAt).toBe(t);
+  });
+
+  it('reflects voices enabled count and CLI detection count', async () => {
+    const payload = await buildPayload({ version: '0.7.0', daemonStartedAt: Date.now() });
+    // Fresh DB (post-_resetDbForTests); voices seed runs the "phase 1"
+    // built-ins so the count is whatever that produces — the meaningful
+    // assertion is that it's a non-negative integer that survives the
+    // serialization round-trip.
+    expect(Number.isInteger(payload.voicesEnabled)).toBe(true);
+    expect(payload.voicesEnabled).toBeGreaterThanOrEqual(0);
+    expect(Number.isInteger(payload.clisDetected)).toBe(true);
+    expect(payload.clisDetected).toBeGreaterThanOrEqual(0);
+  });
+});
+
+describe('getOrCreateInstallAt', () => {
+  it('mints a timestamp on first call and persists it', async () => {
+    const { getOrCreateInstallAt } = await import('../src/lib/telemetry');
+    const before = Date.now();
+    const t = getOrCreateInstallAt();
+    const after = Date.now();
+    expect(t).toBeGreaterThanOrEqual(before);
+    expect(t).toBeLessThanOrEqual(after);
+  });
+
+  it('reuses the same timestamp across calls', async () => {
+    const { getOrCreateInstallAt } = await import('../src/lib/telemetry');
+    const a = getOrCreateInstallAt();
+    // Sleep so a buggy second-mint would visibly drift.
+    await new Promise((r) => setTimeout(r, 5));
+    const b = getOrCreateInstallAt();
+    expect(a).toBe(b);
+  });
+
+  it('replaces a malformed install-at file with a fresh timestamp', async () => {
+    const { getOrCreateInstallAt, _testing: t } = await import('../src/lib/telemetry');
+    fs.writeFileSync(t.installAtPath(), 'not-a-number');
+    const ts = getOrCreateInstallAt();
+    expect(ts).toBeGreaterThan(0);
+    expect(parseInt(fs.readFileSync(t.installAtPath(), 'utf-8').trim(), 10)).toBe(ts);
+  });
+
+  it('returns an in-memory timestamp instead of throwing when the home dir is unwritable', async () => {
+    const { getOrCreateInstallAt } = await import('../src/lib/telemetry');
+    // Point HOME at a path inside a *file* — any mkdir/write under it
+    // is guaranteed to throw ENOTDIR. The function must swallow this
+    // and return Date.now() rather than propagating; otherwise a
+    // single fs failure kills the whole heartbeat (not just install-at).
+    const blocker = path.join(fakeHome, 'blocker-file');
+    fs.writeFileSync(blocker, 'x');
+    const realHomeBackup = process.env.HOME;
+    process.env.HOME = blocker;
+    try {
+      const before = Date.now();
+      const ts = getOrCreateInstallAt();
+      const after = Date.now();
+      expect(ts).toBeGreaterThanOrEqual(before);
+      expect(ts).toBeLessThanOrEqual(after);
+    } finally {
+      process.env.HOME = realHomeBackup;
+    }
   });
 });
 
@@ -216,7 +303,7 @@ describe('sendHeartbeat', () => {
     });
     expect(typeof (init as RequestInit).body).toBe('string');
     expect(result).not.toBeNull();
-    expect(result!.schema).toBe(1);
+    expect(result!.schema).toBe(2);
   });
 
   it('returns null and logs but never throws on fetch failure', async () => {
