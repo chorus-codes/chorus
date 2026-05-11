@@ -3,6 +3,7 @@ import * as os from 'node:os';
 import * as nodePath from 'node:path';
 import { describe, it, expect } from 'vitest';
 import {
+  buildVersionSpawn,
   detectAllClis,
   validateCliPath,
   type CliDetection,
@@ -105,6 +106,101 @@ describe('cli-detect', () => {
           /* ignore */
         }
       }
+    });
+  });
+
+  describe('buildVersionSpawn (issue #32 — Windows .cmd shim spawn)', () => {
+    it('returns the bin path unchanged on non-Windows', () => {
+      if (process.platform === 'win32') return;
+      const spec = buildVersionSpawn('/usr/local/bin/claude');
+      expect(spec.cmd).toBe('/usr/local/bin/claude');
+      expect(spec.args).toEqual(['--version']);
+      expect(spec.shell).toBeUndefined();
+    });
+
+    it('returns the bin path unchanged on non-Windows even for .cmd extension', () => {
+      // A .cmd file on Linux is not a batch shim — pass through.
+      if (process.platform === 'win32') return;
+      const spec = buildVersionSpawn('/home/user/funny.cmd');
+      expect(spec.cmd).toBe('/home/user/funny.cmd');
+      expect(spec.args).toEqual(['--version']);
+    });
+
+    // Windows branch — testable on Linux via the isWin parameter.
+    it('shell-wraps .cmd with quoted path on Windows so spaces survive', () => {
+      // The canonical Windows npm install path contains "Program Files"
+      // for some users. Without quoting, cmd.exe splits at the space
+      // and looks for `C:\Program` which doesn't exist (issue #32-adjacent).
+      const spec = buildVersionSpawn(
+        'C:\\Program Files\\nodejs\\npm\\gemini.cmd',
+        true,
+      );
+      expect(spec.shell).toBe(true);
+      expect(spec.cmd).toBe('"C:\\Program Files\\nodejs\\npm\\gemini.cmd" --version');
+      expect(spec.args).toEqual([]);
+    });
+
+    it('shell-wraps .cmd at a normal AppData path', () => {
+      // This is the actual path from the #32 report.
+      const spec = buildVersionSpawn(
+        'C:\\Users\\u\\AppData\\Roaming\\npm\\gemini.cmd',
+        true,
+      );
+      expect(spec.shell).toBe(true);
+      expect(spec.cmd).toBe('"C:\\Users\\u\\AppData\\Roaming\\npm\\gemini.cmd" --version');
+    });
+
+    it('shell-wraps .bat the same way as .cmd', () => {
+      const spec = buildVersionSpawn('C:\\tools\\codex.bat', true);
+      expect(spec.shell).toBe(true);
+      expect(spec.cmd).toBe('"C:\\tools\\codex.bat" --version');
+    });
+
+    it('does NOT shell-wrap .ps1 — PowerShell needs different invocation', () => {
+      // cmd.exe /c foo.ps1 only works via file-type association and
+      // may be blocked by ExecutionPolicy. Better to fail cleanly than
+      // pretend to handle PowerShell scripts. A future PR can add real
+      // .ps1 support via `powershell.exe -File`.
+      const spec = buildVersionSpawn('C:\\tools\\kimi.ps1', true);
+      expect(spec.shell).toBeUndefined();
+      expect(spec.cmd).toBe('C:\\tools\\kimi.ps1');
+    });
+
+    it('leaves .exe binaries unwrapped on Windows', () => {
+      const spec = buildVersionSpawn(
+        'C:\\Users\\u\\AppData\\Local\\Programs\\Claude\\claude.exe',
+        true,
+      );
+      expect(spec.shell).toBeUndefined();
+      expect(spec.cmd).toBe(
+        'C:\\Users\\u\\AppData\\Local\\Programs\\Claude\\claude.exe',
+      );
+      expect(spec.args).toEqual(['--version']);
+    });
+
+    it('leaves extension-less binaries unwrapped on Windows', () => {
+      const spec = buildVersionSpawn('C:\\msys64\\usr\\bin\\opencode', true);
+      expect(spec.shell).toBeUndefined();
+      expect(spec.cmd).toBe('C:\\msys64\\usr\\bin\\opencode');
+    });
+
+    it('refuses to shell-wrap paths with metacharacters (shell-injection guard)', () => {
+      // A malicious paste like `C:\foo & calc.exe & .cmd` should NOT
+      // round-trip through cmd.exe. We fall back to direct exec which
+      // fails cleanly with no execution risk.
+      const evil = 'C:\\tools\\bar & calc.exe.cmd';
+      const spec = buildVersionSpawn(evil, true);
+      expect(spec.shell).toBeUndefined();
+      // Falls back to the direct branch — spawn will produce ENOENT
+      // or null status rather than execute the shell metacharacters.
+      expect(spec.cmd).toBe(evil);
+      expect(spec.args).toEqual(['--version']);
+    });
+
+    it('refuses to shell-wrap paths with quote characters', () => {
+      const evil = 'C:\\tools\\foo".cmd';
+      const spec = buildVersionSpawn(evil, true);
+      expect(spec.shell).toBeUndefined();
     });
   });
 });

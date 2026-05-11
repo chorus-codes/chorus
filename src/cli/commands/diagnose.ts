@@ -26,6 +26,7 @@ import { spawn } from 'child_process';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
+import { buildVersionSpawn } from '../../lib/cli-detect.js';
 import { isDaemonHealthy, readDaemonInfo } from '../../lib/daemon-discovery.js';
 import { pkg } from '../shared.js';
 
@@ -278,7 +279,15 @@ export function smokeOneCli(bin: string): Promise<SmokeResult> {
     };
     let child: ReturnType<typeof spawn>;
     try {
-      child = spawn(bin, ['--version'], { windowsHide: true });
+      // Same Windows `.cmd`/`.bat` workaround as cli-detect's
+      // verifyRunnable — Node can't spawn batch shims directly on win32
+      // (DEP0190). Issue #32 surfaced this when the diagnose smoke ran
+      // against a user-installed gemini.cmd on Windows.
+      const spec = buildVersionSpawn(bin);
+      child = spawn(spec.cmd, spec.args, {
+        windowsHide: true,
+        shell: spec.shell ?? false,
+      });
     } catch (err) {
       settle({
         ok: false,

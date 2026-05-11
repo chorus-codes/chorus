@@ -242,6 +242,63 @@ function basenameMatches(cli: DetectableCli, binPath: string): boolean {
   return stripped === expected;
 }
 
+/**
+ * Resolve the `spawn`/`spawnSync` arguments for invoking `<bin> --version`
+ * across platforms. On Windows, Node cannot directly execute `.cmd` /
+ * `.bat` shims (DEP0190 / CVE-2024-27980) — calling spawn with a .cmd
+ * target either errors or returns `status: null` (the symptom reported
+ * in issue #32).
+ *
+ * Approach: use Node's `shell: true` which on Windows invokes
+ * `cmd.exe /d /s /c <command>`. Wrapping the bin path in `"..."`
+ * preserves spaces in paths (e.g. `C:\Program Files\foo\bar.cmd`),
+ * which is the common case on Windows npm installs.
+ *
+ * `.ps1` deliberately NOT included — PowerShell scripts need
+ * `powershell.exe -File` (or `pwsh.exe`), and `cmd.exe /c foo.ps1`
+ * only sometimes works via file-type association. We stick to the
+ * .cmd / .bat case which is the actual reported failure mode.
+ *
+ * Shell-injection guard: we only enable `shell: true` when the bin
+ * path matches a strict Windows-path regex (drive letter + safe
+ * chars). Any unexpected character (`&`, `|`, `;`, `\``, `$`) causes
+ * a fallback to the direct-exec branch, which will fail cleanly
+ * rather than risking command injection from a malicious paste.
+ */
+export interface VersionSpawn {
+  cmd: string;
+  args: string[];
+  /** When true, the caller MUST pass `shell: true` to spawn/spawnSync. */
+  shell?: boolean;
+}
+
+const SAFE_WIN_PATH = /^[A-Za-z]:[\\/][\w.\- \\/()]+$/;
+
+export function buildVersionSpawn(
+  binPath: string,
+  isWin: boolean = isWindows,
+): VersionSpawn {
+  if (isWin && /\.(cmd|bat)$/i.test(binPath)) {
+    if (!SAFE_WIN_PATH.test(binPath)) {
+      // Unexpected metacharacter — bail out of the shell-wrapped path
+      // to avoid injection. The direct exec will fail cleanly with a
+      // null/non-zero status, surfaced by the validator's normal
+      // error path. Far safer than passing the suspect string through
+      // cmd.exe.
+      return { cmd: binPath, args: ['--version'] };
+    }
+    // Quote the bin path so cmd.exe /d /s /c handles spaces correctly.
+    // The full command string is what spawn passes to cmd.exe; args
+    // stays empty because the whole invocation is in `cmd`.
+    return {
+      cmd: `"${binPath}" --version`,
+      args: [],
+      shell: true,
+    };
+  }
+  return { cmd: binPath, args: ['--version'] };
+}
+
 function verifyRunnable(
   cli: DetectableCli,
   binPath: string,
@@ -258,10 +315,13 @@ function verifyRunnable(
   }
   let result;
   try {
-    result = spawnSync(binPath, ['--version'], {
+    const spec = buildVersionSpawn(binPath);
+    result = spawnSync(spec.cmd, spec.args, {
       encoding: 'utf-8',
       timeout: timeoutMs,
       stdio: ['ignore', 'pipe', 'pipe'],
+      windowsHide: true,
+      shell: spec.shell ?? false,
     });
   } catch (err) {
     return { ok: false, reason: `failed to spawn (${(err as Error).message})` };
