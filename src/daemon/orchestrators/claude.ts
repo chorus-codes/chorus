@@ -4,6 +4,7 @@ import path from 'node:path';
 import {
   CHORUS_TOOLS,
   DEFAULT_DAEMON_URL,
+  execFileAsync,
   type ConnectOpts,
   type ConnectResult,
   type OrchestratorDefinition,
@@ -145,68 +146,68 @@ async function connectClaude(): Promise<ConnectResult> {
   };
 }
 
-/**
- * Register Chorus as an MCP server in Claude Code's project config.
- * Patches `~/.claude.json` → projects.<projectDir>.mcpServers.chorus.
- *
- * Idempotent: returns `{ added: false }` when the entry already points at
- * the same bin path.
- */
+function readUserScopeChorusEntry(): { binPath: string } | null {
+  const configPath = path.join(os.homedir(), '.claude.json');
+  if (!fs.existsSync(configPath)) return null;
+  try {
+    const config = JSON.parse(fs.readFileSync(configPath, 'utf-8')) as {
+      mcpServers?: Record<string, { args?: unknown }>;
+    };
+    const chorus = config.mcpServers?.chorus;
+    if (!chorus || !Array.isArray(chorus.args)) return null;
+    const binPath = chorus.args[0];
+    return typeof binPath === 'string' ? { binPath } : null;
+  } catch {
+    return null;
+  }
+}
+
 export async function registerClaudeMcpServer(opts: {
   binPath: string;
-  projectDir?: string;
   daemonUrl?: string;
-}): Promise<{ added: boolean; configPath: string; project: string }> {
-  const project = opts.projectDir ?? os.homedir();
+}): Promise<{ added: boolean }> {
+  const existing = readUserScopeChorusEntry();
+  if (existing && existing.binPath === opts.binPath) {
+    return { added: false };
+  }
 
-  let config: Record<string, unknown> = {};
-  if (fs.existsSync(CLAUDE_PROJECT_CONFIG_PATH)) {
+  if (existing) {
     try {
-      config = JSON.parse(
-        fs.readFileSync(CLAUDE_PROJECT_CONFIG_PATH, 'utf-8'),
+      await execFileAsync(
+        'claude',
+        ['mcp', 'remove', 'chorus', '--scope', 'user'],
+        { timeout: 30_000 },
       );
     } catch {
-      throw new Error(
-        `Could not parse ${CLAUDE_PROJECT_CONFIG_PATH}. Fix the JSON or remove it and re-run.`,
-      );
+      /* best-effort */
     }
   }
 
-  const projects =
-    config.projects && typeof config.projects === 'object'
-      ? (config.projects as Record<string, Record<string, unknown>>)
-      : {};
-  const projectBlock = projects[project] ?? {};
-  const mcpServers =
-    projectBlock.mcpServers && typeof projectBlock.mcpServers === 'object'
-      ? (projectBlock.mcpServers as Record<string, unknown>)
-      : {};
-
-  const existing = mcpServers.chorus as
-    | { command?: string; args?: string[]; env?: Record<string, string> }
-    | undefined;
-  if (
-    existing &&
-    Array.isArray(existing.args) &&
-    existing.args[0] === opts.binPath &&
-    existing.args[1] === 'mcp'
-  ) {
-    return { added: false, configPath: CLAUDE_PROJECT_CONFIG_PATH, project };
+  const daemonUrl = opts.daemonUrl ?? DEFAULT_DAEMON_URL;
+  try {
+    await execFileAsync(
+      'claude',
+      [
+        'mcp',
+        'add',
+        'chorus',
+        '--scope',
+        'user',
+        '--env',
+        `CHORUS_DAEMON_URL=${daemonUrl}`,
+        '--',
+        'node',
+        opts.binPath,
+        'mcp',
+      ],
+      { timeout: 30_000 },
+    );
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    throw new Error(`claude mcp add failed: ${msg}`);
   }
 
-  mcpServers.chorus = {
-    command: 'node',
-    args: [opts.binPath, 'mcp'],
-    env: { CHORUS_DAEMON_URL: opts.daemonUrl ?? DEFAULT_DAEMON_URL },
-  };
-
-  projects[project] = { ...projectBlock, mcpServers };
-  fs.writeFileSync(
-    CLAUDE_PROJECT_CONFIG_PATH,
-    JSON.stringify({ ...config, projects }, null, 2),
-    'utf-8',
-  );
-  return { added: true, configPath: CLAUDE_PROJECT_CONFIG_PATH, project };
+  return { added: true };
 }
 
 export const claudeOrchestrator: OrchestratorDefinition = {

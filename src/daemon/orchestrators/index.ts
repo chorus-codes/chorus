@@ -52,9 +52,6 @@ export async function connectByName(
 ): Promise<ConnectResult> {
   const def = ORCHESTRATORS.find((o) => o.name === name);
   if (!def) throw new Error(`Unknown orchestrator '${name}'.`);
-  // Claude is the only orchestrator with a project-config side-effect on
-  // top of the user-config one — keep `registerClaudeMcpServer` running
-  // before `connectClaude` to match the v0.5 ordering.
   if (def.name === 'claude') await registerClaudeMcpServer(opts);
   const result = await def.connect(opts);
   return result.full;
