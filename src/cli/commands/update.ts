@@ -131,7 +131,7 @@ export function registerUpdateCommand(program: Command): void {
         // Hand stdio to npm so the user sees its progress + any errors
         // (EACCES, network, etc.). spawn rather than execFile so we can
         // stream output as it happens.
-        const child = spawn('npm', args, { stdio: 'inherit' });
+        const child = spawn('npm', args, { stdio: 'inherit', shell: process.platform === 'win32' });
         await new Promise<void>((resolve, reject) => {
           child.on('exit', (code) => {
             if (code === 0) resolve();

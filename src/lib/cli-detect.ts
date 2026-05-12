@@ -59,6 +59,7 @@ function discoverNpmPrefixes(): string[] {
       encoding: 'utf-8',
       timeout: 1000,
       stdio: ['ignore', 'pipe', 'ignore'],
+      shell: isWindows,
     });
     if (result.status === 0) {
       const prefix = result.stdout.trim();
@@ -260,9 +261,12 @@ function basenameMatches(cli: DetectableCli, binPath: string): boolean {
  * .cmd / .bat case which is the actual reported failure mode.
  *
  * Shell-injection guard: we only enable `shell: true` when the bin
- * path matches a strict Windows-path regex (drive letter + safe
- * chars). Any unexpected character (`&`, `|`, `;`, `\``, `$`) causes
- * a fallback to the direct-exec branch, which will fail cleanly
+ * path matches a Windows-path pattern (drive letter + no shell
+ * metacharacters). Uses a blacklist of cmd.exe-dangerous chars
+ * (`&`, `|`, `;`, `"`, `` ` ``, `$`, `<`, `>`, `%`) so Unicode
+ * letters (e.g. accented characters in usernames) and `@` (npm
+ * scoped packages) pass through safely. Any blocked char causes a
+ * fallback to the direct-exec branch, which will fail cleanly
  * rather than risking command injection from a malicious paste.
  */
 export interface VersionSpawn {
@@ -272,7 +276,7 @@ export interface VersionSpawn {
   shell?: boolean;
 }
 
-const SAFE_WIN_PATH = /^[A-Za-z]:[\\/][\w.\- \\/()]+$/;
+const SAFE_WIN_PATH = /^[A-Za-z]:[\\/][^|&;"`$<>%\0\r\n]+$/u;
 
 export function buildVersionSpawn(
   binPath: string,
