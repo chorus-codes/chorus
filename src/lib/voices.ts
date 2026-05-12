@@ -118,7 +118,10 @@ export function classifyOpencodeModel(qualified: string): {
  */
 async function probeCodexModelsLive(): Promise<string[] | null> {
   try {
-    const { stdout } = await run('codex', ['debug', 'models'], { timeout: 5_000 });
+    const { stdout } = await run('codex', ['debug', 'models'], {
+      timeout: 5_000,
+      shell: process.platform === 'win32',
+    });
     const parsed = JSON.parse(stdout) as unknown;
     if (
       typeof parsed !== 'object' || parsed === null ||
@@ -401,7 +404,10 @@ export async function seedOpencodeVoicesAsync(): Promise<{
 
   let modelList: string[];
   try {
-    const { stdout } = await run('opencode', ['models'], { timeout: 10_000 });
+    const { stdout } = await run('opencode', ['models'], {
+      timeout: 10_000,
+      shell: process.platform === 'win32',
+    });
     modelList = stdout
       .split('\n')
       .map((l) => l.trim())
