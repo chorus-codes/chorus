@@ -122,6 +122,7 @@ export const CreateChatSchema = z
      * artifact.maxBytes (default 1 MiB).
      */
     artifact: z.string().optional(),
+    repoPath: z.string().optional(),
   })
   .transform((input) => ({
     ...input,
@@ -259,12 +260,15 @@ function personaRowToRef(row: DaemonPersonaRow) {
 export async function createChat(input: unknown) {
   const parsed = CreateChatSchema.parse(input);
 
+  const repoPath = parsed.repoPath ?? process.cwd();
+
   const result = await daemonFetch<DaemonChatRow>("/chats", {
     method: "POST",
     body: JSON.stringify({
       work: parsed.work,
       templateId: parsed.templateId,
       files: parsed.files,
+      repoPath,
       ...(parsed.artifact !== undefined ? { artifact: parsed.artifact } : {}),
     }),
   });
