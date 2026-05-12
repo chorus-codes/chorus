@@ -67,6 +67,7 @@ async function connectKimi(
     try {
       await execFileAsync('kimi', ['mcp', 'remove', 'chorus'], {
         timeout: 30_000,
+        shell: process.platform === 'win32',
       });
     } catch {
       /* best-effort */
@@ -90,7 +91,10 @@ async function connectKimi(
         opts.binPath,
         'mcp',
       ],
-      { timeout: 30_000 },
+      {
+        timeout: 30_000,
+        shell: process.platform === 'win32',
+      },
     );
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
