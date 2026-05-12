@@ -55,7 +55,7 @@ function resolvePromptsDir(): string {
  * Frontmatter is delimited by `---` lines at the top of the file.
  */
 function parsePersonaFile(filePath: string): ParsedPersonaFile {
-  const raw = readFileSync(filePath, 'utf-8');
+  const raw = readFileSync(filePath, 'utf-8').replace(/\r\n/g, '\n');
 
   if (!raw.startsWith('---\n')) {
     throw new Error(`${filePath}: missing YAML frontmatter (must start with "---")`);
