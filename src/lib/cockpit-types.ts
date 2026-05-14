@@ -20,7 +20,8 @@ export type ReviewerLineage =
   | "opencode"
   | "claude"
   | "kimi"
-  | "openrouter";
+  | "openrouter"
+  | "local";
 
 export type AgreementThreshold = "unanimous" | "majority" | "any";
 export type ThresholdAction = "auto-finalize" | "ask-user";
