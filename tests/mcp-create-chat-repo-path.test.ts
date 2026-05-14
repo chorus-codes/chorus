@@ -97,4 +97,21 @@ describe('createChat', () => {
     expect(body.files).toEqual(['src/foo.ts', 'src/bar.ts']);
     expect(body.artifact).toBe('diff body here');
   });
+
+  it('falls back to homedir when process.cwd() throws ENOENT', async () => {
+    // Simulate a deleted cwd. process.cwd() throws on Linux when the
+    // dir backing the process is unlink-then-rmdir'd. We can't reliably
+    // delete fakeCwd while the process holds it as cwd, so spy directly.
+    const cwdSpy = vi.spyOn(process, 'cwd').mockImplementation(() => {
+      throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
+    });
+
+    try {
+      await createChat({ work: 'review this', templateId: 'code-review' });
+      expect(fetchSpy).toHaveBeenCalledTimes(1);
+      expect(bodyOf().repoPath).toBe(os.homedir());
+    } finally {
+      cwdSpy.mockRestore();
+    }
+  });
 });

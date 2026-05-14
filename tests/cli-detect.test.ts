@@ -211,6 +211,15 @@ describe('cli-detect', () => {
       expect(spec.shell).toBeUndefined();
     });
 
+    it('refuses to shell-wrap paths with delayed-expansion character (!)', () => {
+      // `!` triggers cmd.exe delayed expansion when
+      // `setlocal enabledelayedexpansion` is active. A path like
+      // C:\foo\!USERNAME!.cmd would expand env vars at execution time.
+      const evil = 'C:\\foo\\!COMSPEC!.cmd';
+      const spec = buildVersionSpawn(evil, true);
+      expect(spec.shell).toBeUndefined();
+    });
+
     it('accepts a Windows path with @-scoped npm package', () => {
       // npm global scoped packages produce paths like
       // C:\Users\u\AppData\Roaming\npm\node_modules\@anthropic\cli\bin.cmd

@@ -3,6 +3,7 @@
  * Each tool has a Zod input schema and calls daemonFetch.
  */
 
+import os from "node:os";
 import { z } from "zod";
 import yaml from "yaml";
 import {
@@ -10,6 +11,22 @@ import {
   readDaemonInfo,
 } from "../lib/daemon-discovery.js";
 import { daemonFetch, streamChat } from "./client";
+
+/**
+ * `process.cwd()` throws ENOENT when the working directory has been
+ * deleted between process start and the call (e.g. tmpdir cleanup,
+ * `rm -rf` on the project dir while a long-lived MCP server runs).
+ * Fall back to homedir so the daemon can still accept the request —
+ * downstream repo detection will surface a clearer error than an
+ * unhandled ENOENT exception.
+ */
+function safeCwd(): string {
+  try {
+    return process.cwd();
+  } catch {
+    return os.homedir();
+  }
+}
 
 /**
  * Resolve the cockpit URL the run links should point at. Sync read from
@@ -260,7 +277,7 @@ function personaRowToRef(row: DaemonPersonaRow) {
 export async function createChat(input: unknown) {
   const parsed = CreateChatSchema.parse(input);
 
-  const repoPath = parsed.repoPath ?? process.cwd();
+  const repoPath = parsed.repoPath ?? safeCwd();
 
   const result = await daemonFetch<DaemonChatRow>("/chats", {
     method: "POST",

@@ -171,12 +171,17 @@ export async function registerClaudeMcpServer(opts: {
     return { added: false };
   }
 
+  const execOpts = {
+    timeout: 30_000,
+    shell: process.platform === 'win32',
+  };
+
   if (existing) {
     try {
       await execFileAsync(
         'claude',
         ['mcp', 'remove', 'chorus', '--scope', 'user'],
-        { timeout: 30_000 },
+        execOpts,
       );
     } catch {
       /* best-effort */
@@ -200,11 +205,15 @@ export async function registerClaudeMcpServer(opts: {
         opts.binPath,
         'mcp',
       ],
-      { timeout: 30_000 },
+      execOpts,
     );
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    throw new Error(`claude mcp add failed: ${msg}`);
+    throw new Error(
+      `claude mcp add failed: ${msg}\n` +
+        `(if your Claude Code is older than ~v1.0, it may not support ` +
+        `'mcp add --scope user' — upgrade Claude Code and retry)`,
+    );
   }
 
   return { added: true };
