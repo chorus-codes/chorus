@@ -19,6 +19,7 @@ export const COCKPIT_TO_DAEMON: Record<ReviewerLineage, string> = {
   // scoring works. The "openrouter" UI lineage is for run-page rendering
   // only — not a daemon-side template lineage.
   openrouter: "openrouter",
+  local: "local",
 };
 
 // `xai` is a legacy alias from older templates that grouped under cockpit
@@ -39,6 +40,7 @@ export const DAEMON_TO_COCKPIT: Record<string, ReviewerLineage> = {
   moonshot: "kimi",
   openrouter: "openrouter",
   xai: "opencode",
+  local: "local",
 };
 
 export const DAEMON_DEFAULT_MODEL: Record<ReviewerLineage, string> = {
@@ -48,6 +50,7 @@ export const DAEMON_DEFAULT_MODEL: Record<ReviewerLineage, string> = {
   opencode: "kimi-k2.6",
   kimi: "kimi-k2.6",
   openrouter: "",
+  local: "",
 };
 
 const DEFAULT_PHASE: TemplatePhase = {
@@ -138,4 +141,5 @@ export const FALLBACK_LINEAGES = [
   "opencode",
   "kimi",
   "openrouter",
+  "local",
 ] as const satisfies readonly ReviewerLineage[];

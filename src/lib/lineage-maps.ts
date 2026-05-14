@@ -17,7 +17,8 @@ export type DaemonLineage =
   | "openai"
   | "google"
   | "opencode"
-  | "moonshot";
+  | "moonshot"
+  | "local";
 
 export const LINEAGE_LABEL: Record<DaemonLineage, string> = {
   anthropic: "Claude",
@@ -25,6 +26,7 @@ export const LINEAGE_LABEL: Record<DaemonLineage, string> = {
   google: "Gemini",
   opencode: "OpenCode",
   moonshot: "Kimi",
+  local: "Local LLM",
 };
 
 /** Tailwind background colour class for the small lineage dot indicator. */
@@ -34,6 +36,7 @@ const LINEAGE_DOT: Record<DaemonLineage, string> = {
   google: "bg-blue-400",
   opencode: "bg-emerald-400",
   moonshot: "bg-pink-400",
+  local: "bg-teal-400",
 };
 
 /** Returns the human label for a lineage, falling back to the raw key. */
@@ -60,7 +63,8 @@ export type UILineage =
   | "gemini"
   | "opencode"
   | "kimi"
-  | "openrouter";
+  | "openrouter"
+  | "local";
 
 export const UI_LINEAGE_LABEL: Record<UILineage, string> = {
   claude: "Claude",
@@ -74,6 +78,9 @@ export const UI_LINEAGE_LABEL: Record<UILineage, string> = {
   // the runner creates `reviewer-openrouter-N` dirs regardless of the
   // underlying model.
   openrouter: "OpenRouter",
+  // Local inference — any OpenAI-compatible endpoint (Ollama, llama-swap,
+  // LM Studio, vLLM). Base URL configured via Settings → Local LLM.
+  local: "Local LLM",
 };
 
 const UI_LINEAGE_DOT: Record<UILineage, string> = {
@@ -86,6 +93,9 @@ const UI_LINEAGE_DOT: Record<UILineage, string> = {
   // convention, which clashed with lineage-as-brand semantics. Cyan is
   // brand-distinct without state ambiguity.
   openrouter: "bg-cyan-400",
+  // Teal distinguishes local from openrouter (cyan) while staying in the
+  // same cool-green family — both are "non-cloud" HTTP-dispatched voices.
+  local: "bg-teal-400",
 };
 
 export function uiLineageLabel(lineage: string | undefined): string {
@@ -114,6 +124,8 @@ export const UI_LINEAGE_DEFAULT_MODEL: Record<UILineage, string> = {
   // Empty string lets `models?.[0] ?? defaultModel` resolve to "" which
   // the run page treats as "no model" (skips the · model · separator).
   openrouter: "",
+  // No default for local either — model IDs are endpoint-specific.
+  local: "",
 };
 
 /**
@@ -232,6 +244,11 @@ export const UI_LINEAGE_BRAND: Record<UILineage, LineageBrand> = {
     dot: "bg-cyan-400",
     ring: "ring-cyan-400/40",
     gradient: "bg-gradient-to-b from-cyan-500/15 to-card",
+  },
+  local: {
+    dot: "bg-teal-400",
+    ring: "ring-teal-400/40",
+    gradient: "bg-gradient-to-b from-teal-500/15 to-card",
   },
 };
 
