@@ -63,6 +63,10 @@ describe('parseGrok — error path (empirically verified 2026-05-15)', () => {
       message: 'API error (status 403 Forbidden): unknown',
     });
     const events = parseGrok(line);
+    // Length assertion first — without it, an empty events array would
+    // make the type-narrowing guard below silently skip the kind check.
+    expect(events).toHaveLength(1);
+    expect(events[0].type).toBe('error');
     if (events[0].type === 'error') {
       expect(events[0].kind).toBe('auth_invalid');
     }
@@ -74,6 +78,8 @@ describe('parseGrok — error path (empirically verified 2026-05-15)', () => {
       message: 'Network timeout',
     });
     const events = parseGrok(line);
+    expect(events).toHaveLength(1);
+    expect(events[0].type).toBe('error');
     if (events[0].type === 'error') {
       expect(events[0].kind).toBe('grok_stream_error');
     }

@@ -69,8 +69,11 @@ export const grokShim: AgentShim = {
    * it the run hangs waiting for tool-approval prompts that have no UI.
    *
    * `--max-turns 1` keeps reviewer dispatch to a single agentic turn —
-   * reviewers are expected to produce one structured response, not loop.
-   * For doer slots the runner can override via opts (future extension).
+   * reviewers are expected to produce one structured response, not loop
+   * through multi-turn tool-use cycles. Caps subscription-quota burn on
+   * a runaway and matches the single-shot semantics other reviewer
+   * shims rely on. For doer slots the runner could override via opts
+   * (future extension; not wired today).
    *
    * Auth: Grok reads ~/.grok/auth.json (OIDC) or GROK_CODE_XAI_API_KEY.
    * Precheck verifies one of these is present before we even spawn —
@@ -84,6 +87,8 @@ export const grokShim: AgentShim = {
       '--output-format',
       'streaming-json',
       '--yolo',
+      '--max-turns',
+      '1',
       '-m',
       opts.model || 'grok-build',
     ];
