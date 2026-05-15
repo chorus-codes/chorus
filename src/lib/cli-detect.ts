@@ -23,7 +23,8 @@ export type DetectableCli =
   | 'codex-cli'
   | 'gemini-cli'
   | 'opencode-cli'
-  | 'kimi-cli';
+  | 'kimi-cli'
+  | 'grok-cli';
 
 const BINARY_NAME: Record<DetectableCli, string> = {
   'claude-code': 'claude',
@@ -31,6 +32,7 @@ const BINARY_NAME: Record<DetectableCli, string> = {
   'gemini-cli': 'gemini',
   'opencode-cli': 'opencode',
   'kimi-cli': 'kimi',
+  'grok-cli': 'grok',
 };
 
 const isWindows = platform() === 'win32';
@@ -142,6 +144,13 @@ function fallbackPaths(cli: DetectableCli): string[] {
   if (cli === 'kimi-cli') {
     dirs.push(path.join(HOME, '.kimi', 'bin'));
   }
+  if (cli === 'grok-cli') {
+    // xAI's installer drops binaries here (curl|bash from x.ai/cli).
+    // GROK_BIN_DIR env override is honoured upstream but not by the
+    // chorus detector — second-chance scan is best-effort, users on
+    // custom prefixes should add the dir to PATH.
+    dirs.push(path.join(HOME, '.grok', 'bin'));
+  }
 
   // npm-discovered prefixes — cheapest signal for "where did the user
   // actually install global packages?". Pulled last so the static list
@@ -213,6 +222,11 @@ const CLI_SIGNATURES: Record<DetectableCli, RegExp> = {
   // Bare version output — "1.14.30" — same as gemini.
   'opencode-cli': STARTS_WITH_VERSION,
   'kimi-cli': /\bkimi\b/i,
+  // xAI's grok CLI — actual --version output unverified at time of
+  // writing (binary execution sandboxed off in this env). Accepting
+  // either a "grok" name token OR a bare version string; basename
+  // check still gates on the binary being named "grok".
+  'grok-cli': /\bgrok\b/i,
 };
 
 interface VerifyResult {

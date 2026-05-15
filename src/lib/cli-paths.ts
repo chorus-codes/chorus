@@ -28,7 +28,8 @@ export type CliId =
   | 'codex-cli'
   | 'gemini-cli'
   | 'opencode-cli'
-  | 'kimi-cli';
+  | 'kimi-cli'
+  | 'grok-cli';
 
 const ALL_CLI_IDS: readonly CliId[] = [
   'claude-code',
@@ -36,6 +37,7 @@ const ALL_CLI_IDS: readonly CliId[] = [
   'gemini-cli',
   'opencode-cli',
   'kimi-cli',
+  'grok-cli',
 ] as const;
 
 const keyFor = (id: CliId): string => `cli_paths.${id}`;

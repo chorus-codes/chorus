@@ -12,6 +12,7 @@ import {
   windsurfOrchestrator,
 } from './cursor-windsurf.js';
 import { geminiOrchestrator } from './gemini.js';
+import { grokOrchestrator } from './grok.js';
 import { kimiOrchestrator } from './kimi.js';
 import { opencodeOrchestrator } from './opencode.js';
 import type {
@@ -38,6 +39,7 @@ const ORCHESTRATORS: OrchestratorDefinition[] = [
   geminiOrchestrator,
   opencodeOrchestrator,
   kimiOrchestrator,
+  grokOrchestrator,
   cursorOrchestrator,
   windsurfOrchestrator,
 ];

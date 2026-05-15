@@ -176,10 +176,31 @@ export async function runQuickstart(opts: QuickstartOptions = {}): Promise<void>
 
   // 2. Pick a CLI lineage.
   const { detectAllClis } = await import('../../lib/cli-detect.js');
-  const detected = detectAllClis(true).filter((d) => d.found);
+  // Map cli-detect ids to lineage strings the template-schema accepts.
+  // Models intentionally omitted — the daemon's voices seed picks the
+  // canonical default for each lineage, which keeps quickstart in sync
+  // with whatever the user has configured / whatever ships as the
+  // current default. Hardcoding model strings here proved brittle in
+  // self-review (4 reviewers flagged drift risk for kimi-k2.6, gpt-5.5,
+  // opencode/claude-sonnet-4-6).
+  //
+  // grok-cli is intentionally absent: it has no shim yet, so it can't
+  // act as a chorus doer/reviewer. Detected grok installs are skipped
+  // here; the user still sees them on /connect and Grok Build itself
+  // can call chorus tools (auto-picked from ~/.claude.json).
+  const cliToLineage: Record<string, string> = {
+    'claude-code': 'anthropic',
+    'codex-cli': 'openai',
+    'gemini-cli': 'google',
+    'opencode-cli': 'opencode',
+    'kimi-cli': 'moonshot',
+  };
+  const detected = detectAllClis(true)
+    .filter((d) => d.found)
+    .filter((d) => cliToLineage[d.id] !== undefined);
   if (detected.length === 0) {
     console.log('');
-    console.log(`  ${c.red('✗')} no CLIs detected on PATH`);
+    console.log(`  ${c.red('✗')} no dispatchable CLIs detected on PATH`);
     console.log(
       `     install Claude Code, Codex, Gemini CLI, OpenCode, or Kimi CLI`,
     );
@@ -188,23 +209,10 @@ export async function runQuickstart(opts: QuickstartOptions = {}): Promise<void>
     process.exitCode = 1;
     return;
   }
-  // Map cli-detect ids to lineage strings the template-schema accepts.
-  // Models intentionally omitted — the daemon's voices seed picks the
-  // canonical default for each lineage, which keeps quickstart in sync
-  // with whatever the user has configured / whatever ships as the
-  // current default. Hardcoding model strings here proved brittle in
-  // self-review (4 reviewers flagged drift risk for kimi-k2.6, gpt-5.5,
-  // opencode/claude-sonnet-4-6).
-  const cliToLineage: Record<string, string> = {
-    'claude-code': 'anthropic',
-    'codex-cli': 'openai',
-    'gemini-cli': 'google',
-    'opencode-cli': 'opencode',
-    'kimi-cli': 'moonshot',
-  };
   const first = detected[0];
   const lineage = cliToLineage[first.id];
   if (!lineage) {
+    // Unreachable — filter above guarantees lineage exists.
     console.log(`  ${c.red('✗')} detected CLI '${first.id}' has no quickstart mapping`);
     process.exitCode = 1;
     return;

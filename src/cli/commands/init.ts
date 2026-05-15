@@ -35,6 +35,7 @@ async function detectReviewerClis(): Promise<ReviewerDetect> {
       'gemini-cli': 'gemini',
       'opencode-cli': 'opencode',
       'kimi-cli': 'kimi',
+      'grok-cli': 'grok',
     };
     return {
       clis: all.filter((d) => d.found).map((d) => labelMap[d.id] ?? d.id),
@@ -247,6 +248,7 @@ export function registerInitCommand(program: Command): void {
           console.log(c.dim('      gemini     — https://github.com/google-gemini/gemini-cli'));
           console.log(c.dim('      opencode   — https://opencode.ai'));
           console.log(c.dim('      kimi       — https://github.com/MoonshotAI/kimi-cli'));
+          console.log(c.dim('      grok       — https://x.ai/cli'));
           console.log(
             c.dim('      openrouter — Settings → Voices → Add OpenRouter (uses your API key)'),
           );

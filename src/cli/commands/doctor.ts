@@ -60,6 +60,7 @@ function printReport(r: DoctorReport): void {
     'gemini-cli': 'gemini',
     'opencode-cli': 'opencode',
     'kimi-cli': 'kimi',
+    'grok-cli': 'grok',
   };
 
   console.log('');

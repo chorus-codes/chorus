@@ -26,6 +26,7 @@ export type OrchestratorName =
   | 'gemini'
   | 'opencode'
   | 'kimi'
+  | 'grok'
   | 'cursor'
   | 'windsurf';
 

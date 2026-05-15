@@ -17,6 +17,7 @@ const ORCHESTRATOR_TO_PROVIDER: Record<string, string> = {
   gemini: "gemini-cli",
   opencode: "opencode-cli",
   kimi: "kimi-cli",
+  grok: "grok-cli",
 };
 
 export const dynamic = "force-dynamic";
