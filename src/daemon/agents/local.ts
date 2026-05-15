@@ -63,9 +63,25 @@ async function* runLocalStream(
   opts: HeadlessSpawnOptions,
 ): AsyncIterable<AgentEvent> {
   const stored = await secrets.get('local');
-  const config = stored
-    ? (JSON.parse(stored.value) as { base_url?: string; api_key?: string })
-    : {};
+  // Guard JSON.parse — a malformed secret (truncated write, manual edit)
+  // would otherwise throw synchronously inside the async generator and
+  // surface as an opaque "threw" with no structured event in the run log.
+  // Yield a typed error so the cockpit can show "fix your Local LLM
+  // settings" instead.
+  let config: { base_url?: string; api_key?: string } = {};
+  if (stored) {
+    try {
+      config = JSON.parse(stored.value) as { base_url?: string; api_key?: string };
+    } catch {
+      yield {
+        type: 'error',
+        kind: 'config_parse',
+        message:
+          'Local LLM secret is not valid JSON. Re-save the endpoint on Settings → Local LLM.',
+      };
+      return;
+    }
+  }
   const base = config.base_url ?? DEFAULT_BASE;
   const apiKey = config.api_key ?? '';
 
