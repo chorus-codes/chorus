@@ -8,7 +8,9 @@ export type ReviewerLineage =
   | "opencode"
   | "claude"
   | "kimi"
-  | "openrouter";
+  | "openrouter"
+  | "local"
+  | "grok";
 
 export type AgentState =
   | "idle"

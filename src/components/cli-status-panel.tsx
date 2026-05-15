@@ -49,6 +49,7 @@ const ORCHESTRATOR_TO_LINEAGE: Record<string, string> = {
   gemini: "google",
   opencode: "opencode",
   kimi: "moonshot",
+  grok: "grok",
 };
 
 // Map orchestrator name → voices.provider value for the fleet-card lookup.
@@ -61,6 +62,7 @@ const ORCHESTRATOR_TO_PROVIDER: Record<string, string> = {
   gemini: "gemini-cli",
   kimi: "kimi-cli",
   opencode: "opencode-cli",
+  grok: "grok-cli",
 };
 
 function formatResetIn(resetAt?: number): string | null {

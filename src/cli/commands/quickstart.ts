@@ -184,16 +184,18 @@ export async function runQuickstart(opts: QuickstartOptions = {}): Promise<void>
   // self-review (4 reviewers flagged drift risk for kimi-k2.6, gpt-5.5,
   // opencode/claude-sonnet-4-6).
   //
-  // grok-cli is intentionally absent: it has no shim yet, so it can't
-  // act as a chorus doer/reviewer. Detected grok installs are skipped
-  // here; the user still sees them on /connect and Grok Build itself
-  // can call chorus tools (auto-picked from ~/.claude.json).
+  // grok-cli is included now that we have a shim. It still needs a
+  // SuperGrok Heavy subscription at dispatch time — quickstart's
+  // single-reviewer slot will surface a quota_exhausted error cleanly
+  // if the user is on a free tier. That's preferable to silently
+  // skipping the only detected CLI.
   const cliToLineage: Record<string, string> = {
     'claude-code': 'anthropic',
     'codex-cli': 'openai',
     'gemini-cli': 'google',
     'opencode-cli': 'opencode',
     'kimi-cli': 'moonshot',
+    'grok-cli': 'grok',
   };
   const detected = detectAllClis(true)
     .filter((d) => d.found)

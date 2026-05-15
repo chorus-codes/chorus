@@ -22,8 +22,8 @@ import { UI_LINEAGE_AVAILABLE_MODELS } from './lineage-maps.js';
 
 const run = promisify(execFile);
 
-type DaemonLineage = 'anthropic' | 'openai' | 'google' | 'opencode' | 'moonshot';
-type UiLineage = 'claude' | 'codex' | 'gemini' | 'opencode' | 'kimi';
+type DaemonLineage = 'anthropic' | 'openai' | 'google' | 'opencode' | 'moonshot' | 'grok';
+type UiLineage = 'claude' | 'codex' | 'gemini' | 'opencode' | 'kimi' | 'grok';
 
 /**
  * Daemon-side lineage → UI-side lineage (for UI_LINEAGE_AVAILABLE_MODELS
@@ -35,6 +35,7 @@ const LINEAGE_TO_UI: Record<DaemonLineage, UiLineage> = {
   google: 'gemini',
   opencode: 'opencode',
   moonshot: 'kimi',
+  grok: 'grok',
 };
 
 /**
@@ -50,6 +51,10 @@ const SINGLE_MODEL_CLIS: ReadonlyArray<{
   { cli: 'codex-cli', provider: 'codex-cli', lineage: 'openai' },
   { cli: 'gemini-cli', provider: 'gemini-cli', lineage: 'google' },
   { cli: 'kimi-cli', provider: 'kimi-cli', lineage: 'moonshot' },
+  // Grok Build is single-model (grok-build) on first launch. xAI may
+  // ship more model IDs in future; if/when `grok models` exposes them,
+  // promote to a multi-model live-probe like opencode/codex.
+  { cli: 'grok-cli', provider: 'grok-cli', lineage: 'grok' },
 ];
 
 /**
@@ -564,6 +569,7 @@ function humanLineageLabel(l: DaemonLineage): string {
     case 'google': return 'Gemini';
     case 'opencode': return 'OpenCode';
     case 'moonshot': return 'Kimi';
+    case 'grok': return 'Grok';
   }
 }
 

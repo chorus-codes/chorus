@@ -66,8 +66,8 @@ function getGrokStatus(): OrchestratorStatus {
     approvedTools: connected ? 1 : 0,
     totalTools: 1,
     note: connected
-      ? 'Grok Build reads ~/.claude.json automatically — chorus is already wired via your Claude Code config. No additional setup needed.'
-      : 'Grok Build picks up chorus from ~/.claude.json. Run `chorus connect claude` first; Grok will then see chorus automatically (verified via `grok inspect`).',
+      ? 'Two-way wired: (1) Grok Build reads ~/.claude.json automatically, so it can call chorus.* tools; (2) chorus dispatches to grok-build as a reviewer via the new shim. SuperGrok Heavy subscription required for invocation — free-tier returns 403 cleanly.'
+      : 'Grok Build picks up chorus from ~/.claude.json. Run `chorus connect claude` first; Grok will then see chorus automatically. Chorus can also dispatch to grok-build as a reviewer (SuperGrok Heavy subscription required).',
     supported: detected,
     firstCallBehavior: 'inherits_global',
   };

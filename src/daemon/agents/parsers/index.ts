@@ -13,6 +13,7 @@
 
 export { parseClaude } from './claude.js';
 export { parseGemini, parseGeminiExit } from './gemini.js';
+export { parseGrok, parseGrokExit } from './grok.js';
 export { parseKimi } from './kimi.js';
 export { parseOpencode, parseOpencodeExit } from './opencode.js';
 export { parseCodex, parseCodexExit } from './codex.js';

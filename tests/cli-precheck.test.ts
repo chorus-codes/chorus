@@ -257,4 +257,43 @@ describe('precheckLineage', () => {
       expect(mockExecFileSync).toHaveBeenCalledTimes(2);
     });
   });
+
+  describe('grok env-var auth (GROK_CODE_XAI_API_KEY)', () => {
+    let savedKey: string | undefined;
+
+    beforeEach(() => {
+      savedKey = process.env.GROK_CODE_XAI_API_KEY;
+    });
+
+    afterEach(() => {
+      if (savedKey === undefined) delete process.env.GROK_CODE_XAI_API_KEY;
+      else process.env.GROK_CODE_XAI_API_KEY = savedKey;
+    });
+
+    it('returns ok when GROK_CODE_XAI_API_KEY is set even without ~/.grok/auth.json', async () => {
+      // No auth.json on disk — would normally fail. The env var short-
+      // circuits the file probe so users on CI (where grok login can't
+      // run interactively) still pass precheck.
+      process.env.GROK_CODE_XAI_API_KEY = 'xai-test-key';
+      const result = await precheckLineage('grok');
+      expect(result.ok).toBe(true);
+    });
+
+    it('falls back to file probe when env var is unset', async () => {
+      delete process.env.GROK_CODE_XAI_API_KEY;
+      const result = await precheckLineage('grok');
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.reason).toBe('auth_missing');
+        expect(result.cta).toMatch(/grok login|GROK_CODE_XAI_API_KEY/);
+      }
+    });
+
+    it('passes precheck when ~/.grok/auth.json exists even without env var', async () => {
+      delete process.env.GROK_CODE_XAI_API_KEY;
+      writeFakeCred('.grok/auth.json');
+      const result = await precheckLineage('grok');
+      expect(result.ok).toBe(true);
+    });
+  });
 });

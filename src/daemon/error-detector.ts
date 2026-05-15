@@ -211,18 +211,26 @@ export class ErrorDetector {
       lineage === 'openai' ||
       lineage === 'google' ||
       lineage === 'opencode' ||
-      lineage === 'moonshot'
+      lineage === 'moonshot' ||
+      lineage === 'grok'
     ) {
       const authPrompt =
-        /(?:please (?:run|log\s*in|sign\s*in)|run\s+`?(?:claude|codex|gemini|opencode|kimi)\s+login|to\s+sign\s+in|not logged in|not authenticated|no active session|authentication required|api key (?:invalid|missing|expired|revoked|not (?:found|set))|(?:[A-Z_]+_)?API_KEY\s+(?:environment variable\s+)?not\s+(?:found|set))/i.exec(
+        /(?:please (?:run|log\s*in|sign\s*in)|run\s+`?(?:claude|codex|gemini|opencode|kimi|grok)\s+login|to\s+sign\s+in|not logged in|not authenticated|no active session|authentication required|api key (?:invalid|missing|expired|revoked|not (?:found|set))|(?:[A-Z_]+_)?API_KEY\s+(?:environment variable\s+)?not\s+(?:found|set)|SuperGrok Heavy subscription required|Signing in with Grok|Open this URL to sign in)/i.exec(
           paneText,
         );
       if (authPrompt) {
+        const isGrokSubscription =
+          lineage === 'grok' &&
+          /SuperGrok Heavy subscription required/i.test(authPrompt[0]);
         return {
-          kind: 'token_refresh_lost', // maps to auth_invalid health status
+          kind: isGrokSubscription ? 'quota_exhausted' : 'token_refresh_lost',
           lineage,
-          message: `${lineage} CLI is asking you to re-authenticate.`,
-          cta: 'Re-run the CLI login (e.g. `claude login`, `codex login`, `gemini` interactive setup).',
+          message: isGrokSubscription
+            ? 'Grok Build requires a SuperGrok Heavy subscription.'
+            : `${lineage} CLI is asking you to re-authenticate.`,
+          cta: isGrokSubscription
+            ? 'Upgrade at console.x.ai or disable the grok voice in Settings.'
+            : 'Re-run the CLI login (e.g. `claude login`, `codex login`, `gemini` interactive setup).',
           detail: authPrompt[0].slice(0, 200),
         };
       }

@@ -46,7 +46,7 @@ export const CLIS: CliRow[] = [
     id: "grok-cli",
     provider: "grok",
     label: "Grok Build",
-    hint: "xAI — auto-picks chorus from ~/.claude.json (SuperGrok Heavy plan)",
+    hint: "xAI — grok-build model (SuperGrok Heavy plan required for dispatch)",
   },
   {
     id: "cursor",

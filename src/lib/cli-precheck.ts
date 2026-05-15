@@ -79,6 +79,11 @@ const CRED_PATHS: Record<CliLineage, () => string[]> = {
   // Local LLM has no credential file — the base_url lives in the secrets
   // table. The shim errors with auth_missing when base_url is unset.
   local: () => [],
+  // Grok Build stores OIDC tokens in ~/.grok/auth.json (browser flow)
+  // or accepts GROK_CODE_XAI_API_KEY env. The env case is handled by
+  // the precheck-runtime override below; the file probe covers the
+  // common case where the user has run `grok login` interactively.
+  grok: () => [path.join(os.homedir(), '.grok', 'auth.json')],
 };
 
 const LOGIN_HINT: Record<CliLineage, string> = {
@@ -89,6 +94,7 @@ const LOGIN_HINT: Record<CliLineage, string> = {
   moonshot: 'Run `kimi` once interactively, or set up opencode if you use the kimi-via-opencode transport.',
   openrouter: 'Save an OpenRouter API key on the Connect page.',
   local: 'Set a Local LLM base URL on the Connect page.',
+  grok: 'Run `grok login` in a terminal, or set GROK_CODE_XAI_API_KEY (SuperGrok Heavy subscription required).',
 };
 
 /**
@@ -169,6 +175,13 @@ export async function precheckLineage(lineage: CliLineage): Promise<PrecheckResu
   // OpenRouter and local LLM have no on-disk creds — the shim itself errors
   // with auth_missing when the secrets-table key/url is absent. Skip file probe.
   if (lineage === 'openrouter' || lineage === 'local') {
+    return { ok: true };
+  }
+
+  // Grok: env-var auth (GROK_CODE_XAI_API_KEY) short-circuits the file probe.
+  // Without this, a user on CI with the env var set but no ~/.grok/auth.json
+  // would be marked auth_missing even though grok itself would work.
+  if (lineage === 'grok' && process.env.GROK_CODE_XAI_API_KEY) {
     return { ok: true };
   }
 

@@ -51,8 +51,8 @@ const PhaseTimeoutSchema = z
   .max(PHASE_TIMEOUT_MAX_MS)
   .optional();
 
-const lineageEnum = z.enum(['anthropic', 'openai', 'google', 'opencode', 'moonshot', 'openrouter', 'local', 'any']);
-const reviewerLineageEnum = z.enum(['anthropic', 'openai', 'google', 'opencode', 'moonshot', 'openrouter', 'local']);
+const lineageEnum = z.enum(['anthropic', 'openai', 'google', 'opencode', 'moonshot', 'openrouter', 'local', 'grok', 'any']);
+const reviewerLineageEnum = z.enum(['anthropic', 'openai', 'google', 'opencode', 'moonshot', 'openrouter', 'local', 'grok']);
 
 const ReviewerSchema = z.object({
   require: z.number().int().min(0).default(1),

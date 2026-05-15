@@ -13,7 +13,7 @@
  * For now, treat `opencode` as "the OpenCode CLI" and let the user's opencode
  * config decide the underlying model. `moonshot` means the dedicated kimi CLI.
  */
-export type Lineage = 'anthropic' | 'openai' | 'google' | 'opencode' | 'moonshot' | 'openrouter' | 'local' | 'any';
+export type Lineage = 'anthropic' | 'openai' | 'google' | 'opencode' | 'moonshot' | 'openrouter' | 'local' | 'grok' | 'any';
 
 /**
  * Transport-aware sandbox modes (Codex CLI relevant; others ignore).

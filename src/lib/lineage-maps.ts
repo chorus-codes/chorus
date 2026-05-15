@@ -18,7 +18,8 @@ export type DaemonLineage =
   | "google"
   | "opencode"
   | "moonshot"
-  | "local";
+  | "local"
+  | "grok";
 
 export const LINEAGE_LABEL: Record<DaemonLineage, string> = {
   anthropic: "Claude",
@@ -27,6 +28,7 @@ export const LINEAGE_LABEL: Record<DaemonLineage, string> = {
   opencode: "OpenCode",
   moonshot: "Kimi",
   local: "Local LLM",
+  grok: "Grok",
 };
 
 /** Tailwind background colour class for the small lineage dot indicator. */
@@ -37,6 +39,9 @@ const LINEAGE_DOT: Record<DaemonLineage, string> = {
   opencode: "bg-emerald-400",
   moonshot: "bg-pink-400",
   local: "bg-teal-400",
+  // Slate dot for Grok — distinct from claude/gemini/codex brand colours;
+  // matches xAI's neutral monochrome brand palette.
+  grok: "bg-slate-400",
 };
 
 /** Returns the human label for a lineage, falling back to the raw key. */
@@ -64,7 +69,8 @@ export type UILineage =
   | "opencode"
   | "kimi"
   | "openrouter"
-  | "local";
+  | "local"
+  | "grok";
 
 export const UI_LINEAGE_LABEL: Record<UILineage, string> = {
   claude: "Claude",
@@ -81,6 +87,9 @@ export const UI_LINEAGE_LABEL: Record<UILineage, string> = {
   // Local inference — any OpenAI-compatible endpoint (Ollama, llama-swap,
   // LM Studio, vLLM). Base URL configured via Settings → Local LLM.
   local: "Local LLM",
+  // xAI's first-party CLI (grok-build model). Distinct from opencode-go/grok-*
+  // voices which run via the opencode-cli umbrella with lineage="opencode".
+  grok: "Grok",
 };
 
 const UI_LINEAGE_DOT: Record<UILineage, string> = {
@@ -96,6 +105,10 @@ const UI_LINEAGE_DOT: Record<UILineage, string> = {
   // Teal distinguishes local from openrouter (cyan) while staying in the
   // same cool-green family — both are "non-cloud" HTTP-dispatched voices.
   local: "bg-teal-400",
+  // Slate — xAI's neutral monochrome brand. Distinct from the warmer
+  // cloud-provider dots (violet/orange/blue/pink) and the cool-green
+  // HTTP-dispatched family (cyan/teal).
+  grok: "bg-slate-400",
 };
 
 export function uiLineageLabel(lineage: string | undefined): string {
@@ -126,6 +139,9 @@ export const UI_LINEAGE_DEFAULT_MODEL: Record<UILineage, string> = {
   openrouter: "",
   // No default for local either — model IDs are endpoint-specific.
   local: "",
+  // Grok Build has one model today (grok-build). xAI ships single-binary
+  // versioned models, so this stays stable across CLI bumps.
+  grok: "grok-build",
 };
 
 /**
@@ -193,6 +209,12 @@ export const UI_LINEAGE_AVAILABLE_MODELS: Partial<Record<UILineage, string[]>> =
     "kimi-k2-thinking",
     "kimi-k2.5",
   ],
+  // Grok Build ships a single model name today — `grok-build` — which xAI
+  // versions internally. From `grok models` against an authed install:
+  //   * grok-build (default)
+  // SuperGrok Heavy subscription required for invocation. Single-entry
+  // list matches UI_LINEAGE_DEFAULT_MODEL.grok.
+  grok: ['grok-build'],
 };
 
 export function uiLineageDefaultModel(lineage: string | undefined): string | undefined {
@@ -249,6 +271,11 @@ export const UI_LINEAGE_BRAND: Record<UILineage, LineageBrand> = {
     dot: "bg-teal-400",
     ring: "ring-teal-400/40",
     gradient: "bg-gradient-to-b from-teal-500/15 to-card",
+  },
+  grok: {
+    dot: "bg-slate-400",
+    ring: "ring-slate-400/40",
+    gradient: "bg-gradient-to-b from-slate-500/15 to-card",
   },
 };
 

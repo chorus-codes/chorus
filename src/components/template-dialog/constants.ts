@@ -20,6 +20,7 @@ export const COCKPIT_TO_DAEMON: Record<ReviewerLineage, string> = {
   // only — not a daemon-side template lineage.
   openrouter: "openrouter",
   local: "local",
+  grok: "grok",
 };
 
 // `xai` is a legacy alias from older templates that grouped under cockpit
@@ -39,8 +40,12 @@ export const DAEMON_TO_COCKPIT: Record<string, ReviewerLineage> = {
   opencode: "opencode",
   moonshot: "kimi",
   openrouter: "openrouter",
+  // `xai` (daemon) stays mapped to cockpit "opencode" — legacy templates
+  // using lineage:xai for opencode-go/grok-* models still render correctly.
+  // The new first-party Grok Build CLI uses daemon lineage `grok` (below).
   xai: "opencode",
   local: "local",
+  grok: "grok",
 };
 
 export const DAEMON_DEFAULT_MODEL: Record<ReviewerLineage, string> = {
@@ -51,6 +56,7 @@ export const DAEMON_DEFAULT_MODEL: Record<ReviewerLineage, string> = {
   kimi: "kimi-k2.6",
   openrouter: "",
   local: "",
+  grok: "grok-build",
 };
 
 const DEFAULT_PHASE: TemplatePhase = {
@@ -142,4 +148,5 @@ export const FALLBACK_LINEAGES = [
   "kimi",
   "openrouter",
   "local",
+  "grok",
 ] as const satisfies readonly ReviewerLineage[];

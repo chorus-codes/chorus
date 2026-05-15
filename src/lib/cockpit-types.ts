@@ -21,7 +21,8 @@ export type ReviewerLineage =
   | "claude"
   | "kimi"
   | "openrouter"
-  | "local";
+  | "local"
+  | "grok";
 
 export type AgreementThreshold = "unanimous" | "majority" | "any";
 export type ThresholdAction = "auto-finalize" | "ask-user";

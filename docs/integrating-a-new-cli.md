@@ -299,9 +299,28 @@ Before opening a PR, every level should pass its corresponding row:
 
 ## Reference implementations
 
-- **Level 1 → 3 (HTTP-dispatched shim)**: `src/daemon/agents/local.ts` — Local LLM / Ollama. The most recent full-shim integration; touch points are well-documented in PR #42.
+- **Level 3 (subscription-gated CLI shim with verified failure path)**: `src/daemon/agents/grok.ts` + `src/daemon/agents/parsers/grok.ts` — Grok Build. Streaming-json output, env-var OR file-based auth, empirically-verified error path (`SuperGrok Heavy subscription required` → quota_exhausted), happy path inferred from official spec docs. Promoted from Level 2 in PR #46.
+- **Level 1 → 3 (HTTP-dispatched shim)**: `src/daemon/agents/local.ts` — Local LLM / Ollama. The most recent HTTP-shim integration; touch points are well-documented in PR #42.
 - **Level 1 → 3 (CLI/tmux shim)**: `src/daemon/agents/kimi.ts` — clean separation between tmux dispatch and headless invocation.
-- **Level 2 (consumer-only, auto-pickup)**: `src/daemon/orchestrators/grok.ts` — Grok Build. Reads `~/.claude.json` natively; no MCP write of its own.
+- **Level 2 (consumer-only, auto-pickup)**: `src/daemon/orchestrators/grok.ts` (orchestrator side) — keep this when the CLI reads `~/.claude.json` natively even though you're also shipping a shim. Two-way wiring is OK.
 - **Level 2 (consumer-only, own config)**: `src/daemon/orchestrators/cursor-windsurf.ts` — Cursor/Windsurf. Writes its own MCP file.
 
 When in doubt, copy the closest reference and grep for every place the analog CLI's name appears in the codebase.
+
+---
+
+## Shipping a Level 3 shim without a paid subscription
+
+It's tempting to wait until you can verify happy-path. Don't — the costs are higher than the benefits:
+
+**You CAN ship safely without paid auth if:**
+1. The CLI ships docs with an explicit streaming-json schema (e.g. `~/.grok/docs/user-guide/13-headless-mode.md`). Code to the spec, not your guess.
+2. You can empirically reproduce the failure path. Run the CLI unauthenticated, capture stderr, encode it in the error-detector. That's the path 100% of unpaid users hit — verifying it matters more than the happy path.
+3. The failure mode is `auth_missing` / `quota_exhausted`, which chorus's existing health machinery handles cleanly (voice auto-disables after N strikes, no infinite loops).
+
+**You CAN'T ship safely without paid auth if:**
+1. The CLI's docs are missing or contradict empirical behavior.
+2. The failure path is "spawn a browser flow" — chorus's headless dispatch will hang. Either gate at precheck (file probe + env var) or skip the integration.
+3. Cost accounting is critical. No usage block in success events = no per-call cost. Set `estimateCostUsd` to 0 and call it out in the orchestrator note.
+
+The Grok Build integration is a worked example: spec-driven happy path, empirically-verified failure path, env-var bypass at precheck, error-detector signatures for the three known failure shapes. If a SuperGrok Heavy user files a parsing-bug issue, the fix is one parser-line in `grok.ts`; the structural code stays put.
