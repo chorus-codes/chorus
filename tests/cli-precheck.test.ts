@@ -214,5 +214,47 @@ describe('precheckLineage', () => {
       expect(hasKeychainEntry('openai')).toBe(false);
       expect(mockExecFileSync).not.toHaveBeenCalled();
     });
+
+    it('issue #38: probes "Claude Code" when "Claude Code-credentials" is absent', () => {
+      // Claude Code v2.1.140 uses two different Keychain services:
+      //   - "Claude Code-credentials" — Pro/Max OAuth
+      //   - "Claude Code" (no suffix) — API-key auth + some Console flows
+      // First call (suffixed) throws, second call (suffixless) succeeds.
+      mockExecFileSync
+        .mockImplementationOnce(() => { throw new Error('not found'); })
+        .mockReturnValueOnce(Buffer.from(''));
+
+      expect(hasKeychainEntry('anthropic')).toBe(true);
+      expect(mockExecFileSync).toHaveBeenCalledTimes(2);
+      expect(mockExecFileSync).toHaveBeenNthCalledWith(
+        1,
+        'security',
+        ['find-generic-password', '-s', 'Claude Code-credentials'],
+        expect.objectContaining({ stdio: 'ignore' }),
+      );
+      expect(mockExecFileSync).toHaveBeenNthCalledWith(
+        2,
+        'security',
+        ['find-generic-password', '-s', 'Claude Code'],
+        expect.objectContaining({ stdio: 'ignore' }),
+      );
+    });
+
+    it('issue #38: short-circuits on first match — does not probe second service', () => {
+      // If the suffixed entry exists, the suffixless probe is a waste.
+      mockExecFileSync.mockReturnValueOnce(Buffer.from(''));
+
+      expect(hasKeychainEntry('anthropic')).toBe(true);
+      expect(mockExecFileSync).toHaveBeenCalledTimes(1);
+    });
+
+    it('issue #38: returns false only when BOTH services are absent', () => {
+      mockExecFileSync
+        .mockImplementationOnce(() => { throw new Error('not found'); })
+        .mockImplementationOnce(() => { throw new Error('not found'); });
+
+      expect(hasKeychainEntry('anthropic')).toBe(false);
+      expect(mockExecFileSync).toHaveBeenCalledTimes(2);
+    });
   });
 });

@@ -155,12 +155,36 @@ describe('user-reported scenario: two slots both falling back to claude-sonnet-4
     // duplicate claude-sonnet-4-6 reviewer fires.
   });
 
-  it('slot B can claim the same target after slot A releases (e.g. round 2)', () => {
+  it('slot B can claim the same target after slot A releases on failure', () => {
+    // Per the new caller contract (reviewer-driver.ts), release fires
+    // ONLY when slot A's attempt failed (returned null or threw). The
+    // registry itself remains a simple in-flight tracker — its
+    // release() behaviour is unchanged; the caller just decides when
+    // to invoke it.
     expect(tryClaim('chat-1', 1, 'anthropic', 'claude-sonnet-4-6')).toBe(true);
     expect(tryClaim('chat-1', 1, 'anthropic', 'claude-sonnet-4-6')).toBe(false);
     release('chat-1', 1, 'anthropic', 'claude-sonnet-4-6');
-    // The slot has finished — round 1 still in progress, but the
-    // anthropic/claude-sonnet-4-6 dispatch is done.
+    // Slot A failed — slot B is allowed to try this target since the
+    // failure was a model-state problem, not a "model already covered"
+    // condition.
     expect(tryClaim('chat-1', 1, 'anthropic', 'claude-sonnet-4-6')).toBe(true);
+  });
+
+  it('sequential collision: slot A succeeds → slot B blocked all round', () => {
+    // The 2026-05-14 incident — daemon-wide CLI semaphore serialised
+    // reviewer dispatch, so slot A finished claude-sonnet-4-6 first
+    // and released BEFORE slot B advanced its chain to the same
+    // target. Pre-fix: B re-claimed and produced a duplicate output.
+    // Post-fix: the caller only releases on failure; a successful
+    // run holds the claim through the round.
+    expect(tryClaim('chat-1', 1, 'anthropic', 'claude-sonnet-4-6')).toBe(true);
+    // Simulate the new caller behaviour: NO release because the
+    // attempt succeeded. Slot B advancing its chain hits the same
+    // target later in the round and gets back false → advances.
+    expect(tryClaim('chat-1', 1, 'anthropic', 'claude-sonnet-4-6')).toBe(false);
+    expect(tryClaim('chat-1', 1, 'anthropic', 'claude-sonnet-4-6')).toBe(false);
+    // resetRound at phase boundary clears the claim for round 2.
+    resetRound('chat-1', 1);
+    expect(tryClaim('chat-1', 2, 'anthropic', 'claude-sonnet-4-6')).toBe(true);
   });
 });

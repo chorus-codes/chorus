@@ -95,24 +95,33 @@ const LOGIN_HINT: Record<CliLineage, string> = {
  * Claude Code v2+ stores OAuth credentials in the macOS Keychain instead of a
  * file on disk. Probe the Keychain for existence only (no `-w` flag — avoids
  * ACL prompts in headless contexts). Returns false on non-macOS platforms.
+ *
+ * Claude Code uses TWO different Keychain services depending on the auth flow
+ * (issue #38):
+ *   - `Claude Code-credentials` — Pro/Max OAuth via `claude login`
+ *   - `Claude Code` (no suffix) — API-key auth and some Console-account flows
+ * Either entry means the user is authenticated; probe both.
  */
-const KEYCHAIN_SERVICES: Partial<Record<CliLineage, string>> = {
-  anthropic: 'Claude Code-credentials',
+const KEYCHAIN_SERVICES: Partial<Record<CliLineage, string[]>> = {
+  anthropic: ['Claude Code-credentials', 'Claude Code'],
 };
 
 export function hasKeychainEntry(lineage: CliLineage): boolean {
   if (process.platform !== 'darwin') return false;
-  const service = KEYCHAIN_SERVICES[lineage];
-  if (!service) return false;
-  try {
-    execFileSync('security', ['find-generic-password', '-s', service], {
-      stdio: 'ignore',
-      timeout: 5000,
-    });
-    return true;
-  } catch {
-    return false;
+  const services = KEYCHAIN_SERVICES[lineage];
+  if (!services || services.length === 0) return false;
+  for (const service of services) {
+    try {
+      execFileSync('security', ['find-generic-password', '-s', service], {
+        stdio: 'ignore',
+        timeout: 5000,
+      });
+      return true;
+    } catch {
+      /* try next candidate */
+    }
   }
+  return false;
 }
 
 /**

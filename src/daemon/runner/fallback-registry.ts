@@ -15,14 +15,28 @@
  *
  * Semantics:
  *   - `tryClaim(chatId, round, lineage, model)` — true on first claim,
- *     false if another slot in the same chat/round is already running
- *     this exact (lineage, model). Idempotent guard, never throws.
- *   - `release(...)` — called by the same slot when its attempt
- *     finishes (success, null, throw — all paths). Other slots can now
- *     claim. Idempotent.
+ *     false if another slot in the same chat/round has ALREADY run or
+ *     IS running this exact (lineage, model). Idempotent guard.
+ *   - `release(...)` — called by the slot ONLY when its attempt FAILED
+ *     (returned null or threw). On success, the claim is held through
+ *     the round so a later sequential slot can't re-run the same
+ *     (lineage, model) and produce a duplicate output. Idempotent.
  *   - `resetRound(chatId, round)` — drops all claims for a chat/round.
  *     Called from runner on phase_done so a multi-round chat starts
- *     each round with a clean registry.
+ *     each round with a clean registry. This is the only path that
+ *     releases successful claims.
+ *
+ * Why hold on success (and not just in-flight):
+ *   With the daemon-wide CLI semaphore (chorus-102), reviewer slots
+ *   often run sequentially, not in parallel. If we released the claim
+ *   on success, slot A could finish a fallback target, release, and
+ *   then slot B (whose chain reaches the same target) would re-claim
+ *   it — two reviewers both running anthropic/claude-sonnet-4-6 on
+ *   the same round, defeating lineage diversity. Holding the claim
+ *   for the whole round forces B to advance to the next chain entry.
+ *   On failure, we release so B can still try the same target — if it
+ *   failed for A, that's a model-state failure, not a "model already
+ *   covered" condition.
  *
  * Why per-round, not per-chat:
  *   Round 2 reviewers are a fresh fan-out; their fallback targets

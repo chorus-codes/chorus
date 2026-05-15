@@ -17,6 +17,7 @@ import { buildReviewerAsk } from './prompt-builder.js';
 import { runReviewerHeadless } from './reviewer.js';
 import {
   release as releaseFallbackClaim,
+  resetRound as resetFallbackRound,
   tryClaim as tryClaimFallbackTarget,
 } from './fallback-registry.js';
 import { runWithChainFallback, runWithModelFallback } from './run-with-fallback.js';
@@ -191,10 +192,18 @@ export async function runReviewers(
   // chorus-085 (see memory `feedback_let_all_reviewers_finish`),
   // unchanged by this PR. We're only swapping the worker-pool
   // implementation for a daemon-wide semaphore.
-  await Promise.all([
-    ...localCandidateIdxs.map((i) => runOne(i)),
-    ...httpCandidateIdxs.map((i) => runOne(i)),
-  ]);
+  try {
+    await Promise.all([
+      ...localCandidateIdxs.map((i) => runOne(i)),
+      ...httpCandidateIdxs.map((i) => runOne(i)),
+    ]);
+  } finally {
+    // Drop any fallback claims that succeeded in this round so the next
+    // round (and a long-lived daemon) doesn't accumulate held targets.
+    // Failed claims were released inline; successful ones are dropped
+    // here. Safe to call when there are no claims — no-op.
+    resetFallbackRound(chatId, round);
+  }
 
   const agreedCount = reviews.filter((r) => r.outcome === 'agreed').length;
   const failedCount = reviews.filter((r) => r.outcome === 'failed').length;
@@ -475,16 +484,18 @@ async function runReviewer(
             });
             return null;
           }
+          // Cross-lineage swap: when the entry's lineage differs from the
+          // slot's primary, re-resolve the shim. The slot's identity
+          // (agentName, reviewerDir, participant key) stays bound to the
+          // primary lineage so the cockpit card doesn't re-key mid-run —
+          // the cli_warning below tells the UI a swap happened.
+          const entryShim = entry.lineage === candidate.lineage
+            ? shim
+            : pickShimForVoice(entry.lineage as Lineage, entry.model);
+          let result: Awaited<ReturnType<typeof runReviewerHeadless>> | undefined;
+          let threw = false;
           try {
-            // Cross-lineage swap: when the entry's lineage differs from the
-            // slot's primary, re-resolve the shim. The slot's identity
-            // (agentName, reviewerDir, participant key) stays bound to the
-            // primary lineage so the cockpit card doesn't re-key mid-run —
-            // the cli_warning below tells the UI a swap happened.
-            const entryShim = entry.lineage === candidate.lineage
-              ? shim
-              : pickShimForVoice(entry.lineage as Lineage, entry.model);
-            return await runReviewerHeadless({
+            result = await runReviewerHeadless({
               shim: entryShim,
               chatId,
               phase,
@@ -499,11 +510,20 @@ async function runReviewer(
               abortSignal: handle.signal,
               onEvent,
             });
+            return result;
+          } catch (err) {
+            threw = true;
+            throw err;
           } finally {
-            // Release whether the attempt succeeded, returned null, or
-            // threw — the slot is no longer running this target, so
-            // another slot's chain advance can claim it next.
-            releaseFallbackClaim(chatId, round, entry.lineage, entry.model);
+            // Hold the claim through the round when the attempt
+            // succeeded — another slot reaching the same fallback
+            // target should advance instead of producing a duplicate
+            // output. Release only on failure (null or throw) so the
+            // next slot can still try this target. resetRound on
+            // phase_done clears successful claims for the next round.
+            if (threw || result === null) {
+              releaseFallbackClaim(chatId, round, entry.lineage, entry.model);
+            }
           }
         },
         (from, to, fromIdx) => {
