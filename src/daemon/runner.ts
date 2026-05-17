@@ -139,6 +139,13 @@ export async function runChat(opts: PhaseRunnerOptions): Promise<void> {
   // If so, the chat must NOT end approved — there was no real
   // implementation to review.
   let anyPhaseDoerFailed = false;
+  // Distinguishes `iterate.onDisagreement: 'escalate'` from the default
+  // `'continue'` path when surfacing the terminal chat_done. Both end
+  // status='failed', but escalate carries a different verdict + error
+  // string so cockpits/CLIs can render "reviewers disagreed, needs
+  // human" distinctly from "doer never produced a working answer."
+  let doerFailureReason: 'max_rounds_exhausted' | 'escalated_on_disagreement' =
+    'max_rounds_exhausted';
   // Captures the consensus from the most recent review-only phase. Used
   // to override the default 'approved' verdict in chat_done — review-only
   // chats surface what the reviewers actually said rather than auto-
@@ -335,24 +342,52 @@ export async function runChat(opts: PhaseRunnerOptions): Promise<void> {
       }
 
       if (!doerSucceeded) {
-        anyPhaseDoerFailed = true;
-        onEvent({
-          chatId,
-          type: 'phase_failed',
-          payload: {
-            phaseId: stdPhase.id,
-            phaseIdx,
-            kind: stdPhase.kind,
-            role: 'doer',
-            reason: 'max_rounds_exhausted',
-          },
-          ts: Date.now(),
-        });
-        // Don't continue to subsequent phases when a doer failed every
-        // round — there is no real implementation to feed forward, and
-        // the chat must not end 'approved'. The chat_done branch below
-        // handles the terminal status as 'failed' / 'no_review'.
-        break;
+        // Round loop ran out without reviewer consensus. The template's
+        // iterate.onDisagreement policy decides what happens next. The
+        // schema, cockpit form, and SPEC-D-templates have always exposed
+        // three values, but the runner historically only honored
+        // 'continue' — picking 'accept-doer' or 'escalate' was a silent
+        // no-op (issue #49).
+        const outcome = resolveDisagreement(stdPhase.iterate.onDisagreement);
+        if (outcome.kind === 'accept-doer') {
+          // Drop the reviewer veto and accept the doer's last answer as
+          // final. The chat carries on (subsequent phases, ship, etc.)
+          // exactly as if reviewers had agreed in the last round.
+          doerSucceeded = true;
+          onEvent({
+            chatId,
+            type: 'phase_progress',
+            payload: {
+              phaseId: stdPhase.id,
+              phaseIdx,
+              kind: stdPhase.kind,
+              role: 'doer',
+              accepted: 'doer_after_disagreement',
+              round: stdPhase.iterate.maxRounds,
+            },
+            ts: Date.now(),
+          });
+        } else {
+          anyPhaseDoerFailed = true;
+          doerFailureReason = outcome.reason;
+          onEvent({
+            chatId,
+            type: 'phase_failed',
+            payload: {
+              phaseId: stdPhase.id,
+              phaseIdx,
+              kind: stdPhase.kind,
+              role: 'doer',
+              reason: outcome.reason,
+            },
+            ts: Date.now(),
+          });
+          // Don't continue to subsequent phases when a doer failed every
+          // round — there is no real implementation to feed forward, and
+          // the chat must not end 'approved'. The chat_done branch below
+          // handles the terminal status as 'failed' / 'no_review'.
+          break;
+        }
       }
 
       onEvent({
@@ -445,10 +480,20 @@ export async function runChat(opts: PhaseRunnerOptions): Promise<void> {
     // Routed through emitChatDone so an earlier abort (SSE close, user
     // cancel) can't be overwritten by a later "completed" emission.
     if (anyPhaseDoerFailed) {
-      // The doer never produced a real implementation. Don't pretend
-      // the chat was reviewed — surface as failed so the cockpit shows
-      // it red.
-      emitChatDone({ status: 'failed', verdict: 'failed', error: 'doer_failed_all_rounds' });
+      // The doer never produced a real implementation, OR the template's
+      // `iterate.onDisagreement: 'escalate'` policy halted the loop on
+      // reviewer disagreement. Both end status='failed' so the cockpit
+      // renders the chat red; the verdict + error string differ so
+      // downstream can tell "needs human" from "doer broke."
+      if (doerFailureReason === 'escalated_on_disagreement') {
+        emitChatDone({
+          status: 'failed',
+          verdict: 'request_changes',
+          error: 'escalated_on_disagreement',
+        });
+      } else {
+        emitChatDone({ status: 'failed', verdict: 'failed', error: 'doer_failed_all_rounds' });
+      }
     } else if (anyPhaseAllReviewersFailed) {
       emitChatDone({ status: 'no_review', verdict: 'no_review' });
     } else if (shipOutcome.kind === 'merged') {
@@ -517,6 +562,33 @@ function readLastDoerAnswer(chatDir: string): string | undefined {
     }
   }
   return undefined;
+}
+
+/**
+ * Pure helper: given the template's iterate.onDisagreement policy, decide
+ * what happens when the round loop exits without reviewer consensus.
+ *
+ *   'continue'    → the historical default: phase fails, chat ends red
+ *                   with `doer_failed_all_rounds`.
+ *   'accept-doer' → drop the reviewer veto; treat the doer's last answer
+ *                   as final and let the chat carry on as if reviewers
+ *                   had agreed.
+ *   'escalate'    → halt the chat with status=failed but a distinct
+ *                   verdict/error so cockpits can render "needs human
+ *                   review" rather than "doer broke."
+ *
+ * Extracted so the policy table is unit-testable without standing up
+ * the whole runChat scaffold (tmuxMgr, error detector, fake reviewers).
+ */
+export type OnDisagreementPolicy = 'continue' | 'escalate' | 'accept-doer';
+export type DisagreementOutcome =
+  | { kind: 'accept-doer' }
+  | { kind: 'fail'; reason: 'max_rounds_exhausted' | 'escalated_on_disagreement' };
+
+export function resolveDisagreement(policy: OnDisagreementPolicy): DisagreementOutcome {
+  if (policy === 'accept-doer') return { kind: 'accept-doer' };
+  if (policy === 'escalate') return { kind: 'fail', reason: 'escalated_on_disagreement' };
+  return { kind: 'fail', reason: 'max_rounds_exhausted' };
 }
 
 // Re-exports keep external import sites stable. Tests import some of
