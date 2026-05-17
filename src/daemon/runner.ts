@@ -211,15 +211,18 @@ export async function runChat(opts: PhaseRunnerOptions): Promise<void> {
       const stdPhase: StandardPhase = phase;
 
       let doerSucceeded = false;
-      // Distinguishes "doer crashed mid-stream / never produced an answer"
-      // (round-loop exited early via the `!doerAnswer.full` break) from
-      // "doer produced a full answer but reviewers couldn't agree" (round
-      // loop ran to maxRounds with disagreement). onDisagreement policies
-      // ('accept-doer', 'escalate') only apply to the LATTER — accepting a
-      // crashed doer's partial output as final would silently ship garbage.
-      // Convergent finding from 5/8 reviewers on PR #50's self-review.
+      // Reflects the OUTCOME OF THE MOST-RECENTLY-COMPLETED round only:
+      // - doer produced a full answer AND reviewers ran AND no consensus
+      //   (and not allFailed) → true
+      // - doer crashed / aborted / reviewers all crashed → false
+      // Reset at the top of every round so a stale `true` from round N-1
+      // can never bleed into a round-N abort or all-reviewers-failed,
+      // which would otherwise let 'accept-doer' silently accept a non-
+      // disagreement outcome. Convergent finding from PR #50's round-2
+      // self-review (4/8 reviewers flagged the flag-reset gap).
       let disagreementInLastRound = false;
       for (let round = 1; round <= stdPhase.iterate.maxRounds; round++) {
+        disagreementInLastRound = false;
         if (abortSignal.aborted) break;
 
         onEvent({
@@ -266,9 +269,10 @@ export async function runChat(opts: PhaseRunnerOptions): Promise<void> {
         // so failing this round is the right move; reviewing garbage is not.
         if (!doerAnswer || !doerAnswer.full) {
           // Doer crashed mid-stream. The round loop exits here without
-          // recording a real disagreement — onDisagreement policy must NOT
-          // fire on this path, otherwise 'accept-doer' would silently
-          // accept a partial/empty answer as final.
+          // recording a real disagreement — onDisagreement policy must
+          // NOT fire on this path, otherwise 'accept-doer' would silently
+          // accept a partial/empty answer as final. (Top-of-round reset
+          // already covers this; explicit reset here documents intent.)
           disagreementInLastRound = false;
           onEvent({
             chatId,
