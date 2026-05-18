@@ -27,16 +27,23 @@ export function verdictFromReviewerText(content: string): boolean | null {
   // Issue #52 expansions (the original list missed real-world rejections
   // that happened to end with a polite "I'd approve once …" kicker):
   //   - request(?:s|ed|ing)? changes   — covers requests/requested/requesting
-  //   - changes (?:are )?(?:needed|required|requested)
-  //   - needs (?:work|changes|fixes|more work)
   //   - not (?:approved|ready|merging|ok|acceptable|good to (?:merge|ship))
   //   - approve (?:after|once|when|conditional(?:ly)?|if|provided|assuming)
   //   - conditional(?:ly)? approve
   //     — both forms reframe conditional approvals as negative, since
   //       the reviewer is explicitly NOT approving the current diff.
   //   - would(?:\s+not|n['’]?t) approve
+  //
+  // Round-1 self-review (3 convergent dissenters) flagged candidate
+  // patterns `changes (?:are )?(?:needed|required|requested)` and
+  // `needs (?:work|changes|fixes)` as too ambiguous — both match in
+  // clean-approval contexts like "no changes needed, LGTM" or "the
+  // changes requested by the reviewer are fine". They're dropped from
+  // the negatives list; the remaining patterns still catch all three
+  // concrete leak cases in brianmarr's report (case 2a is caught by
+  // `approve after`, case 2 family by `not ready`).
   const negatives =
-    /\b(request(?:s|ed|ing)? changes|changes (?:are )?(?:needed|required|requested)|needs (?:work|changes|fixes|more work)|not (?:approved|ready|merging|ok|acceptable|good to (?:merge|ship))|approve (?:after|once|when|conditional(?:ly)?|if|provided|assuming)|conditional(?:ly)? approve|would(?:\s+not|n['’]?t) approve|disagree|reject(?:ed|ing)?|blocker|(?:do not|don['’]?t) (?:approve|merge)|(?:cannot|can['’]?t) (?:approve|merge)|nack)\b/;
+    /\b(request(?:s|ed|ing)? changes|not (?:approved|ready|merging|ok|acceptable|good to (?:merge|ship))|approve (?:after|once|when|conditional(?:ly)?|if|provided|assuming)|conditional(?:ly)? approve|would(?:\s+not|n['’]?t) approve|disagree|reject(?:ed|ing)?|blocker|(?:do not|don['’]?t) (?:approve|merge)|(?:cannot|can['’]?t) (?:approve|merge)|nack)\b/;
   const positives =
     /\b(approve(?:d|s)?|lgtm|looks good to me|no concerns|ship it|ack)\b/;
 

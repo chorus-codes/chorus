@@ -119,22 +119,19 @@ describe('verdictFromReviewerText', () => {
       expect(verdictFromReviewerText(text)).toBe(false);
     });
 
-    it('case 2a: "changes are needed" + conditional approve in tail', () => {
+    it('case 2: conditional approve in tail wins over "changes are needed" body', () => {
+      // Brian's exact case 2 text. The "approve after" tail clause is
+      // what flips this to false; we deliberately don't match the
+      // ambiguous body phrase "changes are needed" because that pattern
+      // also fires on "no changes needed, LGTM" (see false-positive
+      // tests below).
       const text =
         "Several changes are needed before this can ship. I'll approve after the fixes are in.\n## DONE";
       expect(verdictFromReviewerText(text)).toBe(false);
     });
 
-    it('case 2b: "needs work" alone counts as negative', () => {
-      expect(verdictFromReviewerText(long('this still needs work before shipping'))).toBe(false);
-    });
-
-    it('case 2c: "not ready" counts as negative', () => {
+    it('"not ready" counts as negative', () => {
       expect(verdictFromReviewerText(long('this is not ready for merge'))).toBe(false);
-    });
-
-    it('case 2d: "changes required" counts as negative', () => {
-      expect(verdictFromReviewerText(long('several changes required before approval'))).toBe(false);
     });
 
     it('case 3: body has "Request changes", tail has only "approve once"', () => {
@@ -161,6 +158,28 @@ describe('verdictFromReviewerText', () => {
       // Sanity: the expanded negatives must not eat clean approvals.
       expect(verdictFromReviewerText(long('approve, nothing to add'))).toBe(true);
       expect(verdictFromReviewerText(long('LGTM, all good'))).toBe(true);
+    });
+
+    // Pinned false-positive scenarios that round-1 self-review (cli-2,
+    // cli-3, cli-7) flagged from candidate patterns that have since
+    // been dropped. If anyone is tempted to re-add `changes needed` or
+    // `needs work` to the negatives list, these tests fail loudly.
+    it('"no changes needed, LGTM" stays positive', () => {
+      // Real-world clean-approval phrasing. The dropped pattern
+      // `changes (?:are )?(?:needed|required)` would have flipped this
+      // to false; with that pattern gone, `lgtm` wins from positives.
+      expect(verdictFromReviewerText(long('no changes needed, LGTM'))).toBe(true);
+    });
+
+    it('"the changes requested are fine, approve" stays positive', () => {
+      // Reviewer is describing past requests being resolved, not
+      // issuing a new rejection. `request(?:s|ed|ing)? changes` could
+      // match "changes requested" — but the regex requires the noun
+      // FOLLOWING the verb (`requested changes`), not preceding it,
+      // so this passive form is naturally excluded.
+      expect(
+        verdictFromReviewerText(long('the changes requested have been addressed, approve')),
+      ).toBe(true);
     });
   });
 });
