@@ -107,4 +107,60 @@ describe('verdictFromReviewerText', () => {
   it('detects "don\'t merge"', () => {
     expect(verdictFromReviewerText(long("Don't merge yet"))).toBe(false);
   });
+
+  // Issue #52 — three concrete leak cases from brianmarr's report.
+  // Each one used to return TRUE (false-positive APPROVED) before the
+  // negatives vocabulary was expanded and the tail-first short-circuit
+  // was changed to "negatives win globally".
+  describe('issue #52 — rejection-but-tail-says-approve patterns', () => {
+    it('case 1: "requests changes" (3rd-person plural form)', () => {
+      const text =
+        "This change requests changes before merge. I'd approve a revised version.\n## DONE";
+      expect(verdictFromReviewerText(text)).toBe(false);
+    });
+
+    it('case 2a: "changes are needed" + conditional approve in tail', () => {
+      const text =
+        "Several changes are needed before this can ship. I'll approve after the fixes are in.\n## DONE";
+      expect(verdictFromReviewerText(text)).toBe(false);
+    });
+
+    it('case 2b: "needs work" alone counts as negative', () => {
+      expect(verdictFromReviewerText(long('this still needs work before shipping'))).toBe(false);
+    });
+
+    it('case 2c: "not ready" counts as negative', () => {
+      expect(verdictFromReviewerText(long('this is not ready for merge'))).toBe(false);
+    });
+
+    it('case 2d: "changes required" counts as negative', () => {
+      expect(verdictFromReviewerText(long('several changes required before approval'))).toBe(false);
+    });
+
+    it('case 3: body has "Request changes", tail has only "approve once"', () => {
+      // The rejection lives in the body, the tail (last 400 chars) only
+      // contains the polite kicker. Pre-fix tail-first short-circuited
+      // to TRUE. Post-fix: negatives win globally → FALSE.
+      const body =
+        'Request changes. ' +
+        PAD.repeat(5) + // pushes "Request changes" out of the last-400 window
+        'Happy to approve once these are addressed.\n## DONE';
+      expect(verdictFromReviewerText(body)).toBe(false);
+    });
+
+    it('conditional approve in the tail still counts as negative', () => {
+      // The new "approve (after|once|when|conditional|...)" pattern
+      // catches polite-kicker conditionals even when the body has no
+      // other rejection language.
+      expect(verdictFromReviewerText(long('Looks fine — would approve once tests pass'))).toBe(false);
+      expect(verdictFromReviewerText(long('Approve when the type errors are gone'))).toBe(false);
+      expect(verdictFromReviewerText(long('Conditional approve: only if you add a test'))).toBe(false);
+    });
+
+    it('still approves an unambiguous positive', () => {
+      // Sanity: the expanded negatives must not eat clean approvals.
+      expect(verdictFromReviewerText(long('approve, nothing to add'))).toBe(true);
+      expect(verdictFromReviewerText(long('LGTM, all good'))).toBe(true);
+    });
+  });
 });

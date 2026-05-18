@@ -23,22 +23,42 @@ export function verdictFromReviewerText(content: string): boolean | null {
   // `do not approve` / `cannot approve`. Both spellings are common in real
   // reviews. The optional `['’]?t` segment catches both straight (') and
   // typographic (’) apostrophes — LLMs emit the latter often.
+  //
+  // Issue #52 expansions (the original list missed real-world rejections
+  // that happened to end with a polite "I'd approve once …" kicker):
+  //   - request(?:s|ed|ing)? changes   — covers requests/requested/requesting
+  //   - changes (?:are )?(?:needed|required|requested)
+  //   - needs (?:work|changes|fixes|more work)
+  //   - not (?:approved|ready|merging|ok|acceptable|good to (?:merge|ship))
+  //   - approve (?:after|once|when|conditional(?:ly)?|if|provided|assuming)
+  //   - conditional(?:ly)? approve
+  //     — both forms reframe conditional approvals as negative, since
+  //       the reviewer is explicitly NOT approving the current diff.
+  //   - would(?:\s+not|n['’]?t) approve
   const negatives =
-    /\b(request changes|requesting changes|disagree|reject(?:ed|ing)?|blocker|(?:do not|don['’]?t) (?:approve|merge)|(?:cannot|can['’]?t) (?:approve|merge)|nack)\b/;
+    /\b(request(?:s|ed|ing)? changes|changes (?:are )?(?:needed|required|requested)|needs (?:work|changes|fixes|more work)|not (?:approved|ready|merging|ok|acceptable|good to (?:merge|ship))|approve (?:after|once|when|conditional(?:ly)?|if|provided|assuming)|conditional(?:ly)? approve|would(?:\s+not|n['’]?t) approve|disagree|reject(?:ed|ing)?|blocker|(?:do not|don['’]?t) (?:approve|merge)|(?:cannot|can['’]?t) (?:approve|merge)|nack)\b/;
   const positives =
     /\b(approve(?:d|s)?|lgtm|looks good to me|no concerns|ship it|ack)\b/;
 
-  // Check verdict keywords FIRST — a terse but explicit reply like
-  // "approve ## DONE" (15 chars after sentinel strip) is unambiguous and
-  // shouldn't be filtered out by the length floor. Tail wins over whole
-  // so an analytical review mentioning "good practice" mid-paragraph
-  // doesn't get auto-approved without an explicit verdict at the end.
-  const tail = stripped.slice(-400).toLowerCase();
-  if (negatives.test(tail)) return false;
-  if (positives.test(tail)) return true;
-
   const whole = stripped.toLowerCase();
+  const tail = stripped.slice(-400).toLowerCase();
+
+  // Negatives win globally. Issue #52: previously the function returned
+  // TRUE when the tail contained a positive token even if the body of
+  // the answer carried an explicit rejection. Real reviewers routinely
+  // write "Request changes. … [substantive critique] … Happy to approve
+  // once these are addressed." — that's a rejection, not an approval.
+  // Scan the entire stripped answer for negatives first; only fall
+  // through to positives once we've confirmed there's no rejection
+  // anywhere in the text.
   if (negatives.test(whole)) return false;
+
+  // Positives prefer the tail so an analytical review mentioning
+  // "good practice" mid-paragraph doesn't get auto-approved without an
+  // explicit verdict at the end. Whole-text fallback catches the case
+  // where the verdict lives mid-body and the tail is padded with
+  // closing matter (test: "falls back to whole-text scan").
+  if (positives.test(tail)) return true;
   if (positives.test(whole)) return true;
 
   // No verdict keyword anywhere — return null (ambiguous). The 20-char
