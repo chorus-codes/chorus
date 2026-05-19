@@ -45,12 +45,17 @@ describe('walkAuditPath', () => {
     expect(walkAuditPath(abs)).toEqual([abs]);
   });
 
-  it('walks a directory recursively, sorted', () => {
+  it('walks a directory recursively, returning sorted absolute paths', () => {
     writeFile('a/one.ts', 'a');
     writeFile('b/two.ts', 'b');
     writeFile('c.ts', 'c');
     const result = walkAuditPath(tmpRoot);
-    const rels = result.map((p) => path.relative(tmpRoot, p)).sort();
+    // Don't re-sort here — the function contract IS that output is
+    // sorted. A test that calls .sort() before comparing would silently
+    // pass even if the function returned files in random order, which
+    // defeats the assertion. Convergent self-review (PR #58) flagged
+    // this. Strip the tmp prefix but keep the function's own ordering.
+    const rels = result.map((p) => path.relative(tmpRoot, p));
     expect(rels).toEqual(['a/one.ts', 'b/two.ts', 'c.ts']);
   });
 
@@ -136,14 +141,14 @@ describe('assembleAuditArtifact', () => {
 
   it('skips files whose extension is not in the allowlist', () => {
     const ts = writeFile('foo.ts', 'x');
-    const lock = writeFile('package-lock.json', '{}');
+    const config = writeFile('config.json', '{}');
     const png = writeFile('logo.png', 'binary');
-    const result = assembleAuditArtifact(tmpRoot, [ts, lock, png], { scope: 's' });
+    const result = assembleAuditArtifact(tmpRoot, [ts, config, png], { scope: 's' });
 
-    // JSON IS in the allowlist, png + lock-by-name is not (lock IS json
-    // ext though — package-lock.json passes the allowlist by extension).
+    // .ts and .json IS in the allowlist; .png is not. Lockfile name-
+    // based exclusion is exercised by its own dedicated test below.
     expect(result.filesIncluded).toContain('foo.ts');
-    expect(result.filesIncluded).toContain('package-lock.json');
+    expect(result.filesIncluded).toContain('config.json');
     expect(result.filesSkipped.some((s) => s.includes('logo.png'))).toBe(true);
   });
 
@@ -177,15 +182,24 @@ describe('assembleAuditArtifact', () => {
   });
 
   it('truncates files over AUDIT_MAX_FILE_LINES with elision marker', () => {
-    const lines = Array.from({ length: AUDIT_MAX_FILE_LINES + 100 }, (_, i) => `line ${i}`);
+    const totalLines = AUDIT_MAX_FILE_LINES + 100;
+    const lastLineIdx = totalLines - 1;
+    const lines = Array.from({ length: totalLines }, (_, i) => `line ${i}`);
     const file = writeFile('long.ts', lines.join('\n'));
     const result = assembleAuditArtifact(tmpRoot, [file], { scope: 's' });
 
     expect(result.artifact).toContain('truncated');
-    expect(result.artifact).toMatch(/\[\d+ lines elided\]/);
-    // Head must contain early lines
-    expect(result.artifact).toContain('line 0');
-    expect(result.artifact).toContain(`line ${AUDIT_MAX_FILE_LINES - 1 + 100}`); // last line
+    // Pin the exact elision count so a regression in truncateFileBody
+    // arithmetic gets caught instead of passing under the loose
+    // [\d+ lines elided] match.
+    expect(result.artifact).toMatch(/\[100 lines elided\]/);
+    expect(result.artifact).toMatch(/^line 0$/m);
+    expect(result.artifact).toMatch(new RegExp(`^line ${lastLineIdx}$`, 'm'));
+    // Middle lines must be gone. With HEAD=1500 (lines 0-1499) and
+    // TAIL=500 (lines 1600-2099), the elided block is lines 1500-1599.
+    // Pick a line solidly inside that range. Convergent self-review
+    // (gemini-cli-1) flagged the missing negative assertion.
+    expect(result.artifact).not.toContain('line 1550');
   });
 
   it('records skipped extensions in the trailing skipped section', () => {
@@ -195,6 +209,68 @@ describe('assembleAuditArtifact', () => {
 
     expect(result.artifact).toContain('**Skipped');
     expect(result.artifact).toContain('logo.png');
+  });
+
+  it('rejects files outside rootAbs as path-traversal', () => {
+    // Pinned by self-review: assembleAuditArtifact's docstring promised
+    // "Files outside rootAbs are rejected" but the prior revision had
+    // no implementation. A direct caller passing /etc/passwd with a
+    // tmp rootAbs would have leaked it into the artifact. Now: throws.
+    const inside = writeFile('foo.ts', 'x');
+    const outsideDir = path.join(os.tmpdir(), 'chorus-audit-outside-' + randomUUID());
+    fs.mkdirSync(outsideDir, { recursive: true });
+    const outside = path.join(outsideDir, 'leak.ts');
+    fs.writeFileSync(outside, 'leak');
+    try {
+      expect(() =>
+        assembleAuditArtifact(tmpRoot, [inside, outside], { scope: 's' }),
+      ).toThrow(/outside the audit root/);
+    } finally {
+      fs.rmSync(outsideDir, { recursive: true, force: true });
+    }
+  });
+
+  it('drops lockfiles by name even when extension is allowlisted', () => {
+    // .json, .yaml, .yml all pass the extension allowlist, but
+    // package-lock.json / pnpm-lock.yaml etc. are spec-banned. Pinned
+    // by self-review: 3 reviewers flagged the spec-vs-code drift.
+    const ts = writeFile('foo.ts', 'x');
+    const npmLock = writeFile('package-lock.json', '{}');
+    const pnpmLock = writeFile('pnpm-lock.yaml', 'lockfileVersion: 6');
+    const yarnLock = writeFile('yarn.lock', '# yarn');
+    const result = assembleAuditArtifact(
+      tmpRoot,
+      [ts, npmLock, pnpmLock, yarnLock],
+      { scope: 's' },
+    );
+    expect(result.filesIncluded).toEqual(['foo.ts']);
+    expect(result.filesSkipped.some((s) => s.includes('package-lock.json'))).toBe(true);
+    expect(result.filesSkipped.some((s) => s.includes('pnpm-lock.yaml'))).toBe(true);
+    expect(result.filesSkipped.some((s) => s.includes('yarn.lock'))).toBe(true);
+  });
+
+  it('walkAuditPath drops lockfiles during directory recursion', () => {
+    writeFile('keep.ts', 'x');
+    writeFile('package-lock.json', '{}');
+    writeFile('pnpm-lock.yaml', 'lock');
+    const result = walkAuditPath(tmpRoot);
+    expect(result.map((p) => path.relative(tmpRoot, p))).toEqual(['keep.ts']);
+  });
+
+  it('totalBytes equals the actual artifact body size (header + fences included)', () => {
+    // Convergent self-review (4/8 reviewers) flagged that counting only
+    // the raw file body underreports artifact size. totalBytes must
+    // reflect what's actually being POSTed.
+    const a = writeFile('foo.ts', 'AAA');
+    const b = writeFile('bar.py', 'BBB');
+    const result = assembleAuditArtifact(tmpRoot, [a, b], { scope: 's' });
+
+    // Sum of per-file block sizes. The artifact contains other framing
+    // (heading, skip-note, separators) outside the per-file blocks,
+    // so totalBytes lives below artifact.length but above raw-body sum.
+    const rawBodySum = Buffer.byteLength('AAA', 'utf-8') + Buffer.byteLength('BBB', 'utf-8');
+    expect(result.totalBytes).toBeGreaterThan(rawBodySum);
+    expect(result.totalBytes).toBeLessThan(Buffer.byteLength(result.artifact, 'utf-8'));
   });
 
   it('handles symlinks by skipping (read failure) without throwing', () => {

@@ -37,6 +37,25 @@ const TRUNCATION_TAIL_LINES = 500;
  * surfaced in the trailing "skipped" section. Lockfiles and binary
  * formats are never useful in an audit artifact.
  */
+/**
+ * Filename-based exclusions that run after the extension check.
+ * Lockfiles pass the .json / .yaml / .yml extension filter but are
+ * spec-banned ("Lockfiles and binary formats are never useful in an
+ * audit artifact" — planning/audit-mode.md). Convergent self-review
+ * (3/8 reviewers on PR #58) caught the divergence between spec and
+ * implementation. Match case-insensitively for cross-platform safety.
+ */
+const LOCKFILE_NAMES = new Set([
+  'package-lock.json',
+  'yarn.lock',
+  'pnpm-lock.yaml',
+  'cargo.lock',
+  'composer.lock',
+  'gemfile.lock',
+  'poetry.lock',
+  'go.sum',
+]);
+
 const ALLOWED_EXTENSIONS = new Set([
   '.ts',
   '.tsx',
@@ -152,13 +171,18 @@ export function walkAuditPath(rootAbs: string): string[] {
       const full = path.join(dir, entry.name);
       if (entry.isSymbolicLink()) continue;
       if (entry.isDirectory()) {
-        if (PRUNE_DIRS.has(entry.name)) continue;
-        if (entry.name.startsWith('.') && entry.name !== '.') continue;
+        // PRUNE_DIRS match is case-insensitive — Windows / macOS have
+        // case-insensitive filesystems and a folder named `Node_modules`
+        // should still get pruned. readdirSync never returns `.` or `..`
+        // as Dirent.name, so no `!== '.'` guard is needed.
+        if (PRUNE_DIRS.has(entry.name.toLowerCase())) continue;
+        if (entry.name.startsWith('.')) continue;
         stack.push(full);
         continue;
       }
       if (entry.isFile()) {
         if (entry.name.startsWith('.')) continue;
+        if (LOCKFILE_NAMES.has(entry.name.toLowerCase())) continue;
         out.push(full);
       }
     }
@@ -171,6 +195,13 @@ export function walkAuditPath(rootAbs: string): string[] {
  * Read a file safely (O_NOFOLLOW on POSIX, lstat-then-read on Windows).
  * Returns null on any failure or skip condition — callers decide whether
  * to surface that as a skipped file or hard error.
+ *
+ * TOCTOU note: the read goes through the same fd we opened with
+ * O_NOFOLLOW, not the path string. A prior revision opened a fd, ran
+ * fstat, then re-read via readFileSync(path) — convergent self-review
+ * (5/8 reviewers on PR #58) flagged that a symlink swap between the
+ * stat and the re-read would defeat the O_NOFOLLOW guard. Reading from
+ * the fd closes the window.
  */
 function readFileSafe(abs: string): string | null {
   try {
@@ -180,11 +211,14 @@ function readFileSafe(abs: string): string | null {
         fd = fs.openSync(abs, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
         const stat = fs.fstatSync(fd);
         if (!stat.isFile()) return null;
-        return fs.readFileSync(abs, 'utf-8');
+        return fs.readFileSync(fd, 'utf-8');
       } finally {
         if (fd >= 0) fs.closeSync(fd);
       }
     } else {
+      // Windows fallback: lstat-then-read. The race window here is wider
+      // (no atomic O_NOFOLLOW equivalent) but Windows isn't the primary
+      // target for chorus audits. Documented as best-effort.
       const lstat = fs.lstatSync(abs);
       if (lstat.isSymbolicLink() || !lstat.isFile()) return null;
       return fs.readFileSync(abs, 'utf-8');
@@ -232,10 +266,26 @@ export function assembleAuditArtifact(
     );
   }
 
-  // Filter by extension allowlist; keep the rejected ones for surfacing.
+  // Filter by extension allowlist + lockfile blocklist; keep the
+  // rejected ones for surfacing. Also enforces root-containment:
+  // every file must live under `rootAbs` (closing the docstring
+  // promise that a prior revision left unimplemented — 4/8 reviewers
+  // on PR #58 flagged this as a path-traversal hole when callers
+  // bypass walkAuditPath).
   const eligible: string[] = [];
   const skipped: string[] = [];
   for (const abs of files) {
+    if (!abs.startsWith(rootAbs + path.sep) && abs !== rootAbs) {
+      throw new AuditPackError(
+        'outside_root',
+        `file is outside the audit root (rootAbs=${rootAbs}, file=${abs})`,
+      );
+    }
+    const base = path.basename(abs).toLowerCase();
+    if (LOCKFILE_NAMES.has(base)) {
+      skipped.push(abs);
+      continue;
+    }
     if (ALLOWED_EXTENSIONS.has(path.extname(abs).toLowerCase())) {
       eligible.push(abs);
     } else {
@@ -271,21 +321,32 @@ export function assembleAuditArtifact(
       continue;
     }
     const { body: bodyOut, truncated, originalLines } = truncateFileBody(body);
-    const bytes = Buffer.byteLength(bodyOut, 'utf-8');
 
-    if (totalBytes + bytes > AUDIT_MAX_TOTAL_BYTES) {
-      throw new AuditPackError(
-        'too_many_bytes',
-        `audit content would exceed ${AUDIT_MAX_TOTAL_BYTES}-byte cap; stopped after ${includedRel.length} files. Narrow the scope.`,
-      );
-    }
-
+    // Build the full markdown block before measuring. Counting only the
+    // raw file body underestimated the artifact size by header + fence
+    // overhead (~80-120 bytes per file). Convergent self-review (3/8 on
+    // PR #58) flagged that AuditPackResult.totalBytes — documented as
+    // "bytes of file content emitted into the artifact" — must reflect
+    // what actually gets POSTed, not just the body, so the cap and the
+    // reported number stay apples-to-apples.
     const ext = extLangHint(path.extname(display));
     const header = truncated
       ? `## \`${display}\` (${originalLines} lines, truncated)`
       : `## \`${display}\` (${originalLines} lines)`;
-    blocks.push(`${header}\n\n\`\`\`${ext}\n${bodyOut}\n\`\`\``);
+    const block = `${header}\n\n\`\`\`${ext}\n${bodyOut}\n\`\`\``;
+    const bytes = Buffer.byteLength(block, 'utf-8');
 
+    if (totalBytes + bytes > AUDIT_MAX_TOTAL_BYTES) {
+      const after = includedRel.length === 0
+        ? 'before including any files'
+        : `after ${includedRel.length} file${includedRel.length === 1 ? '' : 's'}`;
+      throw new AuditPackError(
+        'too_many_bytes',
+        `audit content would exceed ${AUDIT_MAX_TOTAL_BYTES}-byte cap ${after}. Narrow the scope.`,
+      );
+    }
+
+    blocks.push(block);
     totalBytes += bytes;
     includedRel.push(display);
   }

@@ -32,6 +32,14 @@ interface AuditOptions {
 const DEFAULT_TEMPLATE = 'review-only';
 const VALID_FOCUS = new Set(['security', 'correctness', 'performance', 'maintainability', 'all']);
 
+/**
+ * Daemon HTTP timeout. Audit POSTs to /chats with the assembled
+ * artifact — if the daemon stalls (libsql lock, OOM, etc.) the CLI
+ * should fail fast with a clear message rather than hang. 30s matches
+ * the project's "every external call has a timeout" rule.
+ */
+const DAEMON_FETCH_TIMEOUT_MS = 30_000;
+
 async function runAudit(targetPath: string, opts: AuditOptions): Promise<void> {
   console.log('');
   console.log(`  ${sym.rocket} ${c.bold('chorus audit')} ${c.dim('— multi-LLM review of existing code')}`);
@@ -54,7 +62,16 @@ async function runAudit(targetPath: string, opts: AuditOptions): Promise<void> {
   }
   const baseUrl = opts.daemonUrl ?? `http://127.0.0.1:${info.daemonPort}`;
 
-  // 2. Resolve + validate path.
+  // 2. Validate --focus before doing any filesystem work. A bad
+  // --focus value should fail in milliseconds, not after a slow walk.
+  const focus = opts.focus ?? 'all';
+  if (!VALID_FOCUS.has(focus)) {
+    console.log(`  ${c.red('✗')} --focus must be one of: ${[...VALID_FOCUS].join(', ')}`);
+    process.exitCode = 1;
+    return;
+  }
+
+  // 3. Resolve + validate path.
   const rootAbs = path.resolve(process.cwd(), targetPath);
   let files: string[];
   try {
@@ -67,14 +84,6 @@ async function runAudit(targetPath: string, opts: AuditOptions): Promise<void> {
     } else {
       console.log(`  ${c.red('✗')} ${err instanceof Error ? err.message : String(err)}`);
     }
-    process.exitCode = 1;
-    return;
-  }
-
-  // 3. Validate --focus.
-  const focus = opts.focus ?? 'all';
-  if (!VALID_FOCUS.has(focus)) {
-    console.log(`  ${c.red('✗')} --focus must be one of: ${[...VALID_FOCUS].join(', ')}`);
     process.exitCode = 1;
     return;
   }
@@ -111,7 +120,8 @@ async function runAudit(targetPath: string, opts: AuditOptions): Promise<void> {
   // 6. Build the audit-framed work brief.
   const work = buildAuditWork(scope, focusPara);
 
-  // 7. Fire the chat.
+  // 7. Fire the chat. AbortSignal.timeout closes the connection if the
+  // daemon hangs — failing fast beats blocking the terminal forever.
   let chatRes: Response;
   try {
     chatRes = await fetch(`${baseUrl}/chats`, {
@@ -122,9 +132,16 @@ async function runAudit(targetPath: string, opts: AuditOptions): Promise<void> {
         templateId,
         artifact: pack.artifact,
       }),
+      signal: AbortSignal.timeout(DAEMON_FETCH_TIMEOUT_MS),
     });
   } catch (err) {
-    console.log(`  ${c.red('✗')} chat create failed: ${err instanceof Error ? err.message : String(err)}`);
+    const msg = err instanceof Error ? err.message : String(err);
+    const timedOut = err instanceof Error && (err.name === 'TimeoutError' || err.name === 'AbortError');
+    if (timedOut) {
+      console.log(`  ${c.red('✗')} chat create timed out after ${DAEMON_FETCH_TIMEOUT_MS}ms (daemon hung?)`);
+    } else {
+      console.log(`  ${c.red('✗')} chat create failed: ${msg}`);
+    }
     process.exitCode = 1;
     return;
   }
