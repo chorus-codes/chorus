@@ -7,19 +7,20 @@
  */
 
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
-import type { MockInstance } from 'vitest';
 import { validateKey, listModels, saveKey } from '../src/daemon/openrouter.js';
 
 const VALID_KEY = 'sk-or-v1_test123';
 const INVALID_KEY = 'sk-or-v1_badkey';
 const OPENROUTER_BASE = 'https://openrouter.ai/api/v1';
 
-// Helper: install a vi.fn() as globalThis.fetch and keep the mock-typed
-// reference so `mockFetch.mock.calls[…]` typechecks. Casting to
-// `typeof fetch` loses the MockInstance surface; keep both.
-function installFetch(impl: ReturnType<typeof vi.fn>): MockInstance {
-  globalThis.fetch = impl as unknown as typeof fetch;
-  return impl as unknown as MockInstance;
+// vi.stubGlobal is the idiomatic vitest primitive for mocking globals:
+// it tracks the original `fetch` and `vi.unstubAllGlobals()` restores
+// it. Bare `globalThis.fetch = ...` leaks past test boundaries because
+// `vi.restoreAllMocks()` doesn't undo property assignments — flagged
+// convergently by 5/8 reviewers on PR #56's chorus self-review.
+function stubFetch(impl: ReturnType<typeof vi.fn>): ReturnType<typeof vi.fn> {
+  vi.stubGlobal('fetch', impl);
+  return impl;
 }
 
 // --- validateKey tests ---
@@ -28,13 +29,14 @@ describe('validateKey', () => {
   // Restore fetch after each test
   afterEach(() => {
     vi.restoreAllMocks();
+    vi.unstubAllGlobals();
   });
 
   it('returns valid=true for a real key (200 from /auth/key)', async () => {
-    globalThis.fetch = vi.fn().mockResolvedValue({
+    stubFetch(vi.fn().mockResolvedValue({
       ok: true,
       status: 200,
-    }) as unknown as typeof fetch;
+    }));
 
     const result = await validateKey(VALID_KEY);
     expect(result.valid).toBe(true);
@@ -42,10 +44,10 @@ describe('validateKey', () => {
   });
 
   it('returns valid=false with "Invalid API key" for 401', async () => {
-    globalThis.fetch = vi.fn().mockResolvedValue({
+    stubFetch(vi.fn().mockResolvedValue({
       ok: false,
       status: 401,
-    }) as unknown as typeof fetch;
+    }));
 
     const result = await validateKey(INVALID_KEY);
     expect(result.valid).toBe(false);
@@ -53,10 +55,10 @@ describe('validateKey', () => {
   });
 
   it('returns valid=false with "Invalid API key" for 403', async () => {
-    globalThis.fetch = vi.fn().mockResolvedValue({
+    stubFetch(vi.fn().mockResolvedValue({
       ok: false,
       status: 403,
-    }) as unknown as typeof fetch;
+    }));
 
     const result = await validateKey(INVALID_KEY);
     expect(result.valid).toBe(false);
@@ -64,10 +66,10 @@ describe('validateKey', () => {
   });
 
   it('returns valid=false with status text for other non-ok statuses', async () => {
-    globalThis.fetch = vi.fn().mockResolvedValue({
+    stubFetch(vi.fn().mockResolvedValue({
       ok: false,
       status: 500,
-    }) as unknown as typeof fetch;
+    }));
 
     const result = await validateKey(INVALID_KEY);
     expect(result.valid).toBe(false);
@@ -87,7 +89,7 @@ describe('validateKey', () => {
   });
 
   it('returns valid=false with network error message on fetch failure', async () => {
-    globalThis.fetch = vi.fn().mockRejectedValue(new Error('ENOTFOUND'));
+    stubFetch(vi.fn().mockRejectedValue(new Error("ENOTFOUND")));
 
     const result = await validateKey(VALID_KEY);
     expect(result.valid).toBe(false);
@@ -95,11 +97,10 @@ describe('validateKey', () => {
   });
 
   it('calls /auth/key endpoint with Bearer Authorization', async () => {
-    const mockFetch = vi.fn().mockResolvedValue({
+    const mockFetch = stubFetch(vi.fn().mockResolvedValue({
       ok: true,
       status: 200,
-    }) as unknown as typeof fetch;
-    globalThis.fetch = mockFetch;
+    }));
 
     await validateKey(VALID_KEY);
 
@@ -112,7 +113,7 @@ describe('validateKey', () => {
   });
 
   it('uses VALIDATE_TIMEOUT_MS (8s) via AbortSignal.timeout', async () => {
-    const mockFetch = installFetch(vi.fn().mockResolvedValue({
+    const mockFetch = stubFetch(vi.fn().mockResolvedValue({
       ok: true,
       status: 200,
     }));
@@ -129,10 +130,11 @@ describe('validateKey', () => {
 describe('listModels', () => {
   afterEach(() => {
     vi.restoreAllMocks();
+    vi.unstubAllGlobals();
   });
 
   it('returns all models from a single-page response', async () => {
-    globalThis.fetch = vi.fn().mockResolvedValue({
+    stubFetch(vi.fn().mockResolvedValue({
       ok: true,
       status: 200,
       json: () =>
@@ -142,7 +144,7 @@ describe('listModels', () => {
             { id: 'openai/gpt-4o', name: 'GPT-4o', context_length: 128000, pricing: { prompt: '0.0000025', completion: '0.00001' } },
           ],
         }),
-    }) as unknown as typeof fetch;
+    }));
 
     const models = await listModels(VALID_KEY);
 
@@ -155,7 +157,7 @@ describe('listModels', () => {
   });
 
   it('maps pricing strings to per-Mtok USD correctly', async () => {
-    globalThis.fetch = vi.fn().mockResolvedValue({
+    stubFetch(vi.fn().mockResolvedValue({
       ok: true,
       status: 200,
       json: () =>
@@ -164,7 +166,7 @@ describe('listModels', () => {
             { id: 'test/model', name: 'Test Model', pricing: { prompt: '0.0000015', completion: '0.0000075' } },
           ],
         }),
-    }) as unknown as typeof fetch;
+    }));
 
     const models = await listModels(VALID_KEY);
 
@@ -173,14 +175,14 @@ describe('listModels', () => {
   });
 
   it('handles missing pricing fields gracefully (become NaN, omitted)', async () => {
-    globalThis.fetch = vi.fn().mockResolvedValue({
+    stubFetch(vi.fn().mockResolvedValue({
       ok: true,
       status: 200,
       json: () =>
         Promise.resolve({
           data: [{ id: 'free/model', name: 'Free Model' }],
         }),
-    }) as unknown as typeof fetch;
+    }));
 
     const models = await listModels(VALID_KEY);
 
@@ -190,7 +192,7 @@ describe('listModels', () => {
   });
 
   it('follows next_cursor pagination until exhausted', async () => {
-    const mockFetch = vi.fn()
+    const mockFetch = stubFetch(vi.fn()
       .mockResolvedValueOnce({
         ok: true,
         status: 200,
@@ -216,13 +218,24 @@ describe('listModels', () => {
           Promise.resolve({
             data: [{ id: 'page3/model', name: 'Page 3 Model' }],
           }),
-      }) as unknown as typeof fetch;
-    globalThis.fetch = mockFetch;
+      }));
 
     const models = await listModels(VALID_KEY);
 
     expect(models).toHaveLength(3);
     expect(mockFetch).toHaveBeenCalledTimes(3);
+
+    // Convergent finding from PR #56 self-review (3 reviewers): assert
+    // each follow-up request actually carried the prior page's cursor.
+    // Without this, a real bug that always re-fetched /models with no
+    // cursor param would still produce a 3-element result (3 separate
+    // page-1 responses) — toHaveLength(3) on its own can't tell the
+    // difference between "pagination works" and "loop runs N times
+    // ignoring the cursor".
+    const urls = mockFetch.mock.calls.map((c) => String(c[0]));
+    expect(urls[0]).not.toMatch(/cursor=/);
+    expect(urls[1]).toContain('cursor=cursor-page-2');
+    expect(urls[2]).toContain('cursor=cursor-page-3');
   });
 
   it('stops at MAX_PAGES (20) guard', async () => {
@@ -230,7 +243,7 @@ describe('listModels', () => {
     // loop must terminate via the MAX_PAGES safety cap. Each fake page
     // returns one model; after 20 pages the loop exits with 20 models
     // accumulated and no infinite-loop hang.
-    const mockFetch = installFetch(
+    const mockFetch = stubFetch(
       vi.fn().mockResolvedValue({
         ok: true,
         status: 200,
@@ -248,16 +261,16 @@ describe('listModels', () => {
   });
 
   it('throws when /models returns non-ok status', async () => {
-    globalThis.fetch = vi.fn().mockResolvedValue({
+    stubFetch(vi.fn().mockResolvedValue({
       ok: false,
       status: 500,
-    }) as unknown as typeof fetch;
+    }));
 
     await expect(listModels(VALID_KEY)).rejects.toThrow('OpenRouter /models returned 500');
   });
 
   it('falls back to "cursor" field when next_cursor is absent', async () => {
-    const mockFetch = vi.fn()
+    const mockFetch = stubFetch(vi.fn()
       .mockResolvedValueOnce({
         ok: true,
         status: 200,
@@ -274,16 +287,18 @@ describe('listModels', () => {
           Promise.resolve({
             data: [{ id: 'page2/model', name: 'Page 2' }],
           }),
-      }) as unknown as typeof fetch;
-    globalThis.fetch = mockFetch;
+      }));
 
     const models = await listModels(VALID_KEY);
 
     expect(models).toHaveLength(2);
+    // Verify the legacy `cursor` field was actually threaded into the
+    // follow-up URL (same review concern as next_cursor above).
+    expect(mockFetch.mock.calls[1]?.[0]).toContain('cursor=legacy-cursor');
   });
 
   it('uses MODELS_TIMEOUT_MS (15s) via AbortSignal.timeout', async () => {
-    const mockFetch = installFetch(vi.fn().mockResolvedValue({
+    const mockFetch = stubFetch(vi.fn().mockResolvedValue({
       ok: true,
       status: 200,
       json: () => Promise.resolve({ data: [] }),
