@@ -4,6 +4,7 @@ import { openBrowser } from './open-browser.js';
 import os from 'os';
 import path from 'path';
 import { resolveCockpitUrl } from '../lib/daemon-discovery.js';
+import { registerAuditCommand } from './commands/audit.js';
 import { registerDiagnoseCommand } from './commands/diagnose.js';
 import { registerDoctorCommand } from './commands/doctor.js';
 import { registerInitCommand } from './commands/init.js';
@@ -65,6 +66,7 @@ registerDoctorCommand(program);
 registerDiagnoseCommand(program);
 registerUpdateCommand(program);
 registerQuickstartCommand(program);
+registerAuditCommand(program);
 
 program
   .command('ui')
