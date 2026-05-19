@@ -7,11 +7,20 @@
  */
 
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
+import type { MockInstance } from 'vitest';
 import { validateKey, listModels, saveKey } from '../src/daemon/openrouter.js';
 
 const VALID_KEY = 'sk-or-v1_test123';
 const INVALID_KEY = 'sk-or-v1_badkey';
 const OPENROUTER_BASE = 'https://openrouter.ai/api/v1';
+
+// Helper: install a vi.fn() as globalThis.fetch and keep the mock-typed
+// reference so `mockFetch.mock.calls[…]` typechecks. Casting to
+// `typeof fetch` loses the MockInstance surface; keep both.
+function installFetch(impl: ReturnType<typeof vi.fn>): MockInstance {
+  globalThis.fetch = impl as unknown as typeof fetch;
+  return impl as unknown as MockInstance;
+}
 
 // --- validateKey tests ---
 
@@ -103,11 +112,10 @@ describe('validateKey', () => {
   });
 
   it('uses VALIDATE_TIMEOUT_MS (8s) via AbortSignal.timeout', async () => {
-    const mockFetch = vi.fn().mockResolvedValue({
+    const mockFetch = installFetch(vi.fn().mockResolvedValue({
       ok: true,
       status: 200,
-    }) as unknown as typeof fetch;
-    globalThis.fetch = mockFetch;
+    }));
 
     await validateKey(VALID_KEY);
 
@@ -218,23 +226,25 @@ describe('listModels', () => {
   });
 
   it('stops at MAX_PAGES (20) guard', async () => {
-    const mockFetch = vi.fn().mockResolvedValue({
-      ok: true,
-      status: 200,
-      json: () =>
-        Promise.resolve({
-          data: [{ id: 'model', name: 'Model' }],
-          next_cursor: 'keep-going',
-        }),
-    }) as unknown as typeof fetch;
-    globalThis.fetch = mockFetch;
+    // Server keeps handing us a fresh cursor forever — the listModels
+    // loop must terminate via the MAX_PAGES safety cap. Each fake page
+    // returns one model; after 20 pages the loop exits with 20 models
+    // accumulated and no infinite-loop hang.
+    const mockFetch = installFetch(
+      vi.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        json: () =>
+          Promise.resolve({
+            data: [{ id: 'model', name: 'Model' }],
+            next_cursor: 'keep-going',
+          }),
+      }),
+    );
 
-    // We can't practically test 20 pages in a unit test without making
-    // it very slow. Instead, we verify the loop structure exists by
-    // checking that a single page is returned and the fetch was called.
-    // The real MAX_PAGES=20 safety is verified by the do-while condition.
     const models = await listModels(VALID_KEY);
-    expect(models).toHaveLength(1);
+    expect(models).toHaveLength(20);
+    expect(mockFetch).toHaveBeenCalledTimes(20);
   });
 
   it('throws when /models returns non-ok status', async () => {
@@ -273,12 +283,11 @@ describe('listModels', () => {
   });
 
   it('uses MODELS_TIMEOUT_MS (15s) via AbortSignal.timeout', async () => {
-    const mockFetch = vi.fn().mockResolvedValue({
+    const mockFetch = installFetch(vi.fn().mockResolvedValue({
       ok: true,
       status: 200,
       json: () => Promise.resolve({ data: [] }),
-    }) as unknown as typeof fetch;
-    globalThis.fetch = mockFetch;
+    }));
 
     await listModels(VALID_KEY);
 
