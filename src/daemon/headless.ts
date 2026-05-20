@@ -270,6 +270,25 @@ export interface SpawnHeadlessOptions {
   /** Tag for the PID record (CLI name, chatId). Best-effort logging only. */
   cli: string;
   chatId?: string;
+  /**
+   * Stream-time error sniffer. Called with the accumulated stderr buffer
+   * after every chunk; if it returns a non-null result the subprocess is
+   * SIGTERMed and a structured `error` event is enqueued.
+   *
+   * Solves the 8-minute codex latency: when `codex exec` fails with
+   * "access token could not be refreshed", the codex CLI retries
+   * internally for ~8 minutes before exiting. Without this hook we wait
+   * for the subprocess to give up on its own. With it, we kill the
+   * subprocess the moment the deterministic signature appears in stderr.
+   *
+   * Scanned on stderr only — many CLIs echo the user's prompt to stdout
+   * (codex doesn't, gemini does), and an auth-error pattern matching
+   * the echoed prompt would false-positive into killing a healthy run.
+   */
+  earlyAbortStderrScan?: (stderrSoFar: string) => {
+    kind: string;
+    message: string;
+  } | null;
 }
 
 /**
@@ -404,6 +423,10 @@ export function spawnHeadless(opts: SpawnHeadlessOptions): HeadlessRun {
   });
 
   // ─── stderr (for error visibility, not parsing) ────────────────────────
+  // Tracks whether the early-abort scanner has already fired, so the
+  // expensive regex scan only runs until the first hit. Cheap follow-on
+  // chunks (heartbeats, progress prints) don't repeat the scan.
+  let earlyAbortFired = false;
   child.stderr.setEncoding('utf-8');
   child.stderr.on('data', (chunk: string) => {
     if (stderrTruncated) return;
@@ -412,6 +435,22 @@ export function spawnHeadless(opts: SpawnHeadlessOptions): HeadlessRun {
       return;
     }
     fullStderr += chunk;
+    if (!earlyAbortFired && opts.earlyAbortStderrScan) {
+      try {
+        const hit = opts.earlyAbortStderrScan(fullStderr);
+        if (hit) {
+          earlyAbortFired = true;
+          enqueue({
+            type: 'error',
+            kind: hit.kind,
+            message: hit.message,
+          });
+          sigtermThenKill('early_abort');
+        }
+      } catch {
+        // Detector blew up — never let it crash the headless run.
+      }
+    }
   });
 
   // ─── heartbeat ─────────────────────────────────────────────────────────

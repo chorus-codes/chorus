@@ -15,6 +15,7 @@ import { quoteValue, quotePath, validateValue } from './quote.js';
 import { preTrustCodexWorkspace } from './preflight.js';
 import { spawnHeadless } from '../headless.js';
 import { parseCodex, parseCodexExit } from './parsers/index.js';
+import { scanCodexStderr } from './parsers/codex-stderr-scan.js';
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
@@ -201,6 +202,12 @@ export const codexShim: AgentShim = {
       timeoutMs: opts.timeoutMs,
       abortSignal: opts.abortSignal,
       heartbeat: true, // no streaming; heartbeat keeps UI alive
+      // Cut codex's 8-minute internal-retry loop on auth failures by
+      // matching the deterministic stderr signatures the moment they
+      // surface. Without this, parseCodexExit only sees the error
+      // after `codex` finally gives up — which is the multi-minute
+      // wait we're trying to remove.
+      earlyAbortStderrScan: scanCodexStderr,
     });
 
     return run.events;

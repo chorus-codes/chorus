@@ -32,7 +32,17 @@ import { getHealth, type CliLineage } from './cli-health';
 export type PrecheckFailReason =
   | 'quota_exhausted'
   | 'auth_missing'
-  | 'auth_unreadable';
+  | 'auth_unreadable'
+  | 'auth_invalid_recent';
+
+/**
+ * Cooldown after an auth_invalid health record before we'll re-spawn the
+ * same lineage. Sized to be longer than codex's worst observed internal-
+ * retry window (~8 min) so the second attempt doesn't relapse into the
+ * same wait. Short enough that a one-off transient failure doesn't lock
+ * the user out for the rest of their session.
+ */
+const AUTH_INVALID_COOLDOWN_MS = 10 * 60 * 1000;
 
 export type PrecheckResult =
   | { ok: true }
@@ -179,6 +189,32 @@ export async function precheckLineage(lineage: CliLineage): Promise<PrecheckResu
     }
     // resetAt missing or already past — fall through and let the spawn try.
     // Stale health markers self-clear when a successful run records 'healthy'.
+  }
+
+  // Layer 1b: recent auth failure cooldown. When the error-detector flagged
+  // an auth_invalid in the last AUTH_INVALID_COOLDOWN_MS, refuse to spawn
+  // again. Reason: codex's "refresh token already used" failure mode takes
+  // 8 minutes of internal retries before the CLI exits, and gemini's quota-
+  // exhausted+auth-rejected combo can hang similarly. Once we've observed
+  // the failure once, subsequent attempts in the next 10 minutes are almost
+  // certain to hit the same wall — paying the same 8-minute penalty per
+  // spawn turns one bad reviewer into a 30-minute chat. The cooldown buys
+  // the user time to re-authenticate (or for cli-health to clear itself
+  // when a different chat happens to succeed).
+  if (health.status === 'auth_invalid') {
+    const elapsed = Date.now() - health.updatedAt;
+    if (elapsed >= 0 && elapsed < AUTH_INVALID_COOLDOWN_MS) {
+      const minsLeft = Math.ceil((AUTH_INVALID_COOLDOWN_MS - elapsed) / 60_000);
+      return {
+        ok: false,
+        reason: 'auth_invalid_recent',
+        message:
+          `${lineage} CLI was marked auth-invalid recently — skipping spawn ` +
+          `(cooldown ~${minsLeft} min). ` +
+          (health.message ? `Last error: ${health.message}` : ''),
+        cta: LOGIN_HINT[lineage],
+      };
+    }
   }
 
   // OpenRouter and local LLM have no on-disk creds — the shim itself errors

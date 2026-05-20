@@ -119,6 +119,38 @@ describe('precheckLineage', () => {
     });
   });
 
+  describe('auth_invalid cooldown', () => {
+    it('blocks when health is auth_invalid and updatedAt is recent', async () => {
+      writeFakeCred('.codex/auth.json');
+      await recordHealth({
+        lineage: 'openai',
+        status: 'auth_invalid',
+        message: 'token refresh failed',
+      });
+      const result = await precheckLineage('openai');
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.reason).toBe('auth_invalid_recent');
+        expect(result.message).toMatch(/cooldown/i);
+      }
+    });
+
+    it('falls through when auth_invalid is older than the cooldown window', async () => {
+      writeFakeCred('.codex/auth.json');
+      // Stamp an old updatedAt by writing the raw key. recordHealth
+      // always uses Date.now(); we need a stale value.
+      const { settings } = await import('@/lib/db');
+      await settings.set('cli_health.openai', {
+        lineage: 'openai',
+        status: 'auth_invalid',
+        message: 'old failure',
+        updatedAt: Date.now() - 60 * 60_000, // 1h ago — well past the 10m cooldown
+      });
+      const result = await precheckLineage('openai');
+      expect(result.ok).toBe(true);
+    });
+  });
+
   describe('cred gate', () => {
     it('blocks when no credential file exists for the lineage', async () => {
       // No fake creds written for openai

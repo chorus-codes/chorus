@@ -16,9 +16,26 @@ import { getPermissions } from '../../lib/settings/permissions.js';
 import {
   classifyOpenRouterError,
   getHealth,
+  kindToStatus,
   recordHealth,
   type CliLineage,
 } from '../../lib/cli-health.js';
+
+const KNOWN_HEALTH_LINEAGES: readonly CliLineage[] = [
+  'anthropic',
+  'openai',
+  'google',
+  'opencode',
+  'moonshot',
+  'openrouter',
+  'local',
+  'grok',
+  'antigravity',
+];
+
+function isKnownHealthLineage(lineage: string): lineage is CliLineage {
+  return (KNOWN_HEALTH_LINEAGES as readonly string[]).includes(lineage);
+}
 import { synthesizeCostUsd } from '../../lib/model-pricing.js';
 import { StreamFileWriter } from './stream-file-writer.js';
 import { verdictFromReviewerText } from './verdict.js';
@@ -249,6 +266,27 @@ export async function runReviewerHeadless(args: {
           }).catch((healthErr: unknown) => {
             console.error('[chorus] recordHealth failed for openrouter:', healthErr);
           });
+        } else {
+          // Non-openrouter headless errors: record health under the
+          // candidate's lineage when the error kind maps to a known
+          // status. Mirrors what the tmux doer/reviewer drivers already
+          // do via errorDetector.inspect() — without this the headless
+          // path leaves cli-health stale, the precheck cooldown can't
+          // fire, and the next chat in the next 10 minutes pays the
+          // same 8-minute codex-retry tax.
+          const mapped = kindToStatus(event.kind);
+          if (mapped !== 'unknown' && isKnownHealthLineage(candidateLineage)) {
+            recordHealth({
+              lineage: candidateLineage as CliLineage,
+              status: mapped,
+              message: event.message,
+            }).catch((healthErr: unknown) => {
+              console.error(
+                `[chorus] recordHealth failed for ${candidateLineage}:`,
+                healthErr,
+              );
+            });
+          }
         }
         // First error wins by default — but a more-specific later
         // kind can supersede a vague earlier one. The gemini parser
