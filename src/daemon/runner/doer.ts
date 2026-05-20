@@ -387,10 +387,14 @@ export async function runDoerHeadless(args: {
     // them in sync.
     // Mirror the classified error onto the caller's out-param so the
     // doer-driver can decide retry-vs-advance without re-parsing
-    // answer.md. Only mutated on errored runs.
-    if (errored && errorSummary && lastError) {
-      lastError.kind = errorSummary.kind;
-      lastError.message = errorSummary.message;
+    // answer.md. Only mutated on errored runs. Falls back to 'unknown'
+    // if errored fired before errorSummary was set so the caller's
+    // out-param is never left undefined on a real failure (matches
+    // reviewer.ts; caught by chorus self-audit on PR #79).
+    if (errored && lastError) {
+      lastError.kind = errorSummary?.kind ?? 'unknown';
+      lastError.message =
+        errorSummary?.message ?? '(no message captured)';
     }
     if (errored && !finalText && errorSummary) {
       try {

@@ -48,6 +48,13 @@ export interface CliError {
  *                            ends with no kind match — usually a brief
  *                            upstream blip
  *   - unknown                same as stream_failure
+ *   - openrouter_fetch_failed  pre-HTTP network error from the OpenRouter
+ *                            shim — DNS blip, ECONNRESET mid-handshake,
+ *                            ETIMEDOUT. Exactly the case retry is for.
+ *                            (Flagged by codex in chorus self-audit on PR #79.)
+ *   - openrouter_no_body     2xx response with empty body — anomalous
+ *                            edge state at the OpenRouter edge; second
+ *                            request normally succeeds.
  *
  * Also retryable: HTTP-dispatched shim 5xx codes from OpenRouter (the
  * caller passes the `openrouter_<code>` kind verbatim — we accept any
@@ -62,6 +69,8 @@ export function isRetryableErrorKind(kind: string | undefined): boolean {
     case 'tmux_dead':
     case 'stream_failure':
     case 'unknown':
+    case 'openrouter_fetch_failed':
+    case 'openrouter_no_body':
       return true;
   }
   if (kind.startsWith('openrouter_')) {

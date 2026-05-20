@@ -3,6 +3,7 @@ import path from 'path';
 import { DEFAULT_TMUX_PHASE_TIMEOUT_MS, type StandardPhase } from '../../lib/template-schema.js';
 import { recordHealth, kindToStatus, type CliLineage } from '../../lib/cli-health.js';
 import { precheckLineage } from '../../lib/cli-precheck.js';
+import { abortableSleep } from '../../lib/abortable-sleep.js';
 import { personas } from '../../lib/db/index.js';
 import { getPermissions } from '../../lib/settings/permissions.js';
 import { getTransport } from '../../lib/settings/transport.js';
@@ -247,7 +248,8 @@ export async function runDoer(
               },
               ts: Date.now(),
             });
-            await new Promise((r) => setTimeout(r, RETRY_BACKOFF_MS));
+            await abortableSleep(RETRY_BACKOFF_MS, handle.signal);
+            if (handle.signal.aborted) return null;
           }
           return null;
         },

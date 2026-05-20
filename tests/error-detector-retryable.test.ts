@@ -78,6 +78,19 @@ describe('isRetryableErrorKind', () => {
     });
   });
 
+  describe('OpenRouter shim error kinds', () => {
+    it('openrouter_fetch_failed is retryable (pre-HTTP network error)', () => {
+      // Emitted when the fetch itself throws — DNS, ECONNRESET,
+      // ETIMEDOUT. Exactly what retry is designed to catch.
+      expect(isRetryableErrorKind('openrouter_fetch_failed')).toBe(true);
+    });
+
+    it('openrouter_no_body is retryable (2xx with empty body)', () => {
+      // Anomalous edge state — second request normally succeeds.
+      expect(isRetryableErrorKind('openrouter_no_body')).toBe(true);
+    });
+  });
+
   describe('OpenRouter HTTP codes', () => {
     it('5xx codes are retryable', () => {
       // Upstream outage; retry has a real chance.
