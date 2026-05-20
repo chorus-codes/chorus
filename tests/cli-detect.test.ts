@@ -12,9 +12,9 @@ import {
 
 describe('cli-detect', () => {
   describe('detectAllClis', () => {
-    it('returns array of 6 entries (one per DetectableCli)', () => {
+    it('returns array of 7 entries (one per DetectableCli)', () => {
       const clis = detectAllClis();
-      expect(clis).toHaveLength(6);
+      expect(clis).toHaveLength(7);
     });
 
     it('each entry has id, found, optional path and source', () => {
@@ -26,6 +26,7 @@ describe('cli-detect', () => {
         'opencode-cli',
         'kimi-cli',
         'grok-cli',
+        'antigravity-cli',
       ];
 
       clis.forEach((cli: CliDetection) => {

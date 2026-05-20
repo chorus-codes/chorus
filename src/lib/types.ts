@@ -10,7 +10,8 @@ export type ReviewerLineage =
   | "kimi"
   | "openrouter"
   | "local"
-  | "grok";
+  | "grok"
+  | "antigravity";
 
 export type AgentState =
   | "idle"

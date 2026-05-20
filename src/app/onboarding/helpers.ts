@@ -49,6 +49,12 @@ export const CLIS: CliRow[] = [
     hint: "xAI — grok-build model (SuperGrok Heavy plan required for dispatch)",
   },
   {
+    id: "antigravity-cli",
+    provider: "antigravity",
+    label: "Antigravity CLI",
+    hint: "Google — Gemini 3.5 Flash via Google AI Pro (`agy` binary)",
+  },
+  {
     id: "cursor",
     provider: "cursor",
     label: "Cursor",
@@ -104,6 +110,8 @@ export function manualBinaryName(cliId: string): string {
       return "kimi";
     case "grok-cli":
       return "grok";
+    case "antigravity-cli":
+      return "agy";
     default:
       return cliId;
   }

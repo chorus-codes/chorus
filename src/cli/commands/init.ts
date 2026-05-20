@@ -36,6 +36,7 @@ async function detectReviewerClis(): Promise<ReviewerDetect> {
       'opencode-cli': 'opencode',
       'kimi-cli': 'kimi',
       'grok-cli': 'grok',
+      'antigravity-cli': 'agy',
     };
     return {
       clis: all.filter((d) => d.found).map((d) => labelMap[d.id] ?? d.id),

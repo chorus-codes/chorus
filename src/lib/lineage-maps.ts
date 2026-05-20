@@ -19,7 +19,8 @@ export type DaemonLineage =
   | "opencode"
   | "moonshot"
   | "local"
-  | "grok";
+  | "grok"
+  | "antigravity";
 
 export const LINEAGE_LABEL: Record<DaemonLineage, string> = {
   anthropic: "Claude",
@@ -29,6 +30,12 @@ export const LINEAGE_LABEL: Record<DaemonLineage, string> = {
   moonshot: "Kimi",
   local: "Local LLM",
   grok: "Grok",
+  // Antigravity is Google's second first-party CLI alongside gemini-cli —
+  // separate binary (`agy`), separate auth (~/.gemini/antigravity-cli/),
+  // single locked model (Gemini 3.5 Flash). Distinct lineage so users with
+  // both CLIs installed get TWO Google voices in the picker, not one that
+  // collides on the `google` key.
+  antigravity: "Antigravity",
 };
 
 /** Tailwind background colour class for the small lineage dot indicator. */
@@ -42,6 +49,10 @@ const LINEAGE_DOT: Record<DaemonLineage, string> = {
   // Slate dot for Grok — distinct from claude/gemini/codex brand colours;
   // matches xAI's neutral monochrome brand palette.
   grok: "bg-slate-400",
+  // Sky for Antigravity — adjacent to gemini's blue (same vendor) but a
+  // distinct shade so the cockpit doesn't visually conflate the two
+  // Google CLIs on the run page.
+  antigravity: "bg-sky-400",
 };
 
 /** Returns the human label for a lineage, falling back to the raw key. */
@@ -70,7 +81,8 @@ export type UILineage =
   | "kimi"
   | "openrouter"
   | "local"
-  | "grok";
+  | "grok"
+  | "antigravity";
 
 export const UI_LINEAGE_LABEL: Record<UILineage, string> = {
   claude: "Claude",
@@ -90,6 +102,10 @@ export const UI_LINEAGE_LABEL: Record<UILineage, string> = {
   // xAI's first-party CLI (grok-build model). Distinct from opencode-go/grok-*
   // voices which run via the opencode-cli umbrella with lineage="opencode".
   grok: "Grok",
+  // Google's second first-party CLI — Gemini 3.5 Flash via `agy`. Distinct
+  // from `gemini` lineage so the two Google CLIs render as separate
+  // reviewer cards when both are installed.
+  antigravity: "Antigravity",
 };
 
 const UI_LINEAGE_DOT: Record<UILineage, string> = {
@@ -109,6 +125,9 @@ const UI_LINEAGE_DOT: Record<UILineage, string> = {
   // cloud-provider dots (violet/orange/blue/pink) and the cool-green
   // HTTP-dispatched family (cyan/teal).
   grok: "bg-slate-400",
+  // Sky — same vendor as gemini (blue family) but a distinct shade so the
+  // cockpit doesn't conflate the two Google CLIs at a glance.
+  antigravity: "bg-sky-400",
 };
 
 export function uiLineageLabel(lineage: string | undefined): string {
@@ -142,6 +161,10 @@ export const UI_LINEAGE_DEFAULT_MODEL: Record<UILineage, string> = {
   // Grok Build has one model today (grok-build). xAI ships single-binary
   // versioned models, so this stays stable across CLI bumps.
   grok: "grok-build",
+  // Antigravity CLI is locked to Gemini 3.5 Flash (High) by Google — no
+  // --model flag on `agy`. The chorus-side label is informational; the
+  // CLI picks the model at runtime.
+  antigravity: "gemini-3.5-flash",
 };
 
 /**
@@ -215,6 +238,11 @@ export const UI_LINEAGE_AVAILABLE_MODELS: Partial<Record<UILineage, string[]>> =
   // SuperGrok Heavy subscription required for invocation. Single-entry
   // list matches UI_LINEAGE_DEFAULT_MODEL.grok.
   grok: ['grok-build'],
+  // Antigravity ships a single locked model (Gemini 3.5 Flash). The chorus-
+  // side id `gemini-3.5-flash` mirrors what `agy` self-reports — the CLI
+  // doesn't accept a --model flag, but listing it here keeps the voices
+  // catalog / template dropdown consistent with other single-model CLIs.
+  antigravity: ['gemini-3.5-flash'],
 };
 
 export function uiLineageDefaultModel(lineage: string | undefined): string | undefined {
@@ -276,6 +304,11 @@ export const UI_LINEAGE_BRAND: Record<UILineage, LineageBrand> = {
     dot: "bg-slate-400",
     ring: "ring-slate-400/40",
     gradient: "bg-gradient-to-b from-slate-500/15 to-card",
+  },
+  antigravity: {
+    dot: "bg-sky-400",
+    ring: "ring-sky-400/40",
+    gradient: "bg-gradient-to-b from-sky-500/15 to-card",
   },
 };
 

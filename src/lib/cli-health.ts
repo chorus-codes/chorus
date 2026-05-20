@@ -19,7 +19,8 @@ export type CliLineage =
   | 'moonshot'
   | 'openrouter'
   | 'local'
-  | 'grok';
+  | 'grok'
+  | 'antigravity';
 
 export type HealthStatus =
   | 'healthy'
@@ -50,6 +51,7 @@ const ALL_LINEAGES: CliLineage[] = [
   'openrouter',
   'local',
   'grok',
+  'antigravity',
 ];
 
 export async function recordHealth(input: {

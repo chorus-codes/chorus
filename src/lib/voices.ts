@@ -22,8 +22,8 @@ import { UI_LINEAGE_AVAILABLE_MODELS } from './lineage-maps.js';
 
 const run = promisify(execFile);
 
-type DaemonLineage = 'anthropic' | 'openai' | 'google' | 'opencode' | 'moonshot' | 'grok';
-type UiLineage = 'claude' | 'codex' | 'gemini' | 'opencode' | 'kimi' | 'grok';
+type DaemonLineage = 'anthropic' | 'openai' | 'google' | 'opencode' | 'moonshot' | 'grok' | 'antigravity';
+type UiLineage = 'claude' | 'codex' | 'gemini' | 'opencode' | 'kimi' | 'grok' | 'antigravity';
 
 /**
  * Daemon-side lineage → UI-side lineage (for UI_LINEAGE_AVAILABLE_MODELS
@@ -36,6 +36,7 @@ const LINEAGE_TO_UI: Record<DaemonLineage, UiLineage> = {
   opencode: 'opencode',
   moonshot: 'kimi',
   grok: 'grok',
+  antigravity: 'antigravity',
 };
 
 /**
@@ -55,6 +56,10 @@ const SINGLE_MODEL_CLIS: ReadonlyArray<{
   // ship more model IDs in future; if/when `grok models` exposes them,
   // promote to a multi-model live-probe like opencode/codex.
   { cli: 'grok-cli', provider: 'grok-cli', lineage: 'grok' },
+  // Antigravity CLI ships locked to Gemini 3.5 Flash (High) — `agy` has
+  // no `--model` flag. Treat as single-model; if Google ever exposes
+  // multi-model selection here, promote to a live-probe like opencode.
+  { cli: 'antigravity-cli', provider: 'antigravity-cli', lineage: 'antigravity' },
 ];
 
 /**
@@ -570,6 +575,7 @@ function humanLineageLabel(l: DaemonLineage): string {
     case 'opencode': return 'OpenCode';
     case 'moonshot': return 'Kimi';
     case 'grok': return 'Grok';
+    case 'antigravity': return 'Antigravity';
   }
 }
 

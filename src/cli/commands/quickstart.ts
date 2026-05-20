@@ -196,6 +196,7 @@ export async function runQuickstart(opts: QuickstartOptions = {}): Promise<void>
     'opencode-cli': 'opencode',
     'kimi-cli': 'moonshot',
     'grok-cli': 'grok',
+    'antigravity-cli': 'antigravity',
   };
   const detected = detectAllClis(true)
     .filter((d) => d.found)

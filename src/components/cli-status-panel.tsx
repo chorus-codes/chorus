@@ -50,6 +50,7 @@ const ORCHESTRATOR_TO_LINEAGE: Record<string, string> = {
   opencode: "opencode",
   kimi: "moonshot",
   grok: "grok",
+  antigravity: "antigravity",
 };
 
 // Map orchestrator name → voices.provider value for the fleet-card lookup.
@@ -63,6 +64,7 @@ const ORCHESTRATOR_TO_PROVIDER: Record<string, string> = {
   kimi: "kimi-cli",
   opencode: "opencode-cli",
   grok: "grok-cli",
+  antigravity: "antigravity-cli",
 };
 
 function formatResetIn(resetAt?: number): string | null {

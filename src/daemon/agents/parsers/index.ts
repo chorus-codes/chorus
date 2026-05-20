@@ -11,6 +11,7 @@
  * the shim call `spawnHeadless({ parseLine: parseX })`.
  */
 
+export { parseAntigravity, parseAntigravityExit } from './antigravity.js';
 export { parseClaude } from './claude.js';
 export { parseGemini, parseGeminiExit } from './gemini.js';
 export { parseGrok, parseGrokExit } from './grok.js';

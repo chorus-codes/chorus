@@ -24,7 +24,8 @@ export type DetectableCli =
   | 'gemini-cli'
   | 'opencode-cli'
   | 'kimi-cli'
-  | 'grok-cli';
+  | 'grok-cli'
+  | 'antigravity-cli';
 
 const BINARY_NAME: Record<DetectableCli, string> = {
   'claude-code': 'claude',
@@ -33,6 +34,10 @@ const BINARY_NAME: Record<DetectableCli, string> = {
   'opencode-cli': 'opencode',
   'kimi-cli': 'kimi',
   'grok-cli': 'grok',
+  // Antigravity CLI ships as `agy` — Google's own naming. Distinct from the
+  // `antigravity` VSCode IDE binary at ~/.antigravity-server/.../antigravity
+  // which is unrelated to chorus.
+  'antigravity-cli': 'agy',
 };
 
 const isWindows = platform() === 'win32';
@@ -227,6 +232,11 @@ const CLI_SIGNATURES: Record<DetectableCli, RegExp> = {
   // either a "grok" name token OR a bare version string; basename
   // check still gates on the binary being named "grok".
   'grok-cli': /\bgrok\b/i,
+  // Antigravity CLI's `agy --version` prints a bare semver ("1.0.0") with no
+  // name token — same shape as gemini-cli and opencode-cli. The basename
+  // allowlist below gates on the binary actually being named `agy`, so a
+  // generic semver match here is safe.
+  'antigravity-cli': STARTS_WITH_VERSION,
 };
 
 interface VerifyResult {

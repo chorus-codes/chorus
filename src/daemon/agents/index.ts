@@ -5,6 +5,7 @@
  */
 
 import type { AgentRegistry, AgentShim, Lineage } from './types.js';
+import { antigravityShim } from './antigravity.js';
 import { claudeShim } from './claude.js';
 import { codexShim } from './codex.js';
 import { geminiShim } from './gemini.js';
@@ -23,6 +24,7 @@ const SHIMS: Record<Lineage, AgentShim> = {
   openrouter: openrouterShim,
   local: localShim,
   grok: grokShim,
+  antigravity: antigravityShim,
   any: claudeShim, // Fallback to Claude
 };
 
@@ -58,4 +60,4 @@ export function isHttpDispatchedShim(shim: AgentShim): boolean {
 }
 
 // Re-export shims for direct access if needed
-export { claudeShim, codexShim, geminiShim, grokShim, opencodeShim, kimiShim, openrouterShim, localShim };
+export { antigravityShim, claudeShim, codexShim, geminiShim, grokShim, opencodeShim, kimiShim, openrouterShim, localShim };

@@ -84,6 +84,14 @@ const CRED_PATHS: Record<CliLineage, () => string[]> = {
   // the precheck-runtime override below; the file probe covers the
   // common case where the user has run `grok login` interactively.
   grok: () => [path.join(os.homedir(), '.grok', 'auth.json')],
+  // Antigravity CLI (`agy`) stores its OAuth token in
+  // ~/.gemini/antigravity-cli/antigravity-oauth-token. Without it agy
+  // attempts to launch a browser OAuth flow inline and the headless
+  // dispatch hangs forever — gate at precheck so we never spawn into
+  // that state.
+  antigravity: () => [
+    path.join(os.homedir(), '.gemini', 'antigravity-cli', 'antigravity-oauth-token'),
+  ],
 };
 
 const LOGIN_HINT: Record<CliLineage, string> = {
@@ -95,6 +103,7 @@ const LOGIN_HINT: Record<CliLineage, string> = {
   openrouter: 'Save an OpenRouter API key on the Connect page.',
   local: 'Set a Local LLM base URL on the Connect page.',
   grok: 'Run `grok login` in a terminal, or set GROK_CODE_XAI_API_KEY (SuperGrok Heavy subscription required).',
+  antigravity: 'Run `agy` interactively to complete the OAuth flow (Google AI Pro subscription required for Gemini 3.5 Flash).',
 };
 
 /**

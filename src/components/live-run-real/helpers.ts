@@ -9,6 +9,7 @@ export const AGENT_LABEL: Record<string, string> = {
   opencode: "opencode-cli",
   kimi: "kimi-cli",
   grok: "grok-cli",
+  antigravity: "antigravity-cli",
   // Matches the on-disk dir name the runner creates for HTTP-dispatched
   // voices (`reviewer-openrouter-<idx>`) so the synthesized pending card
   // reconciles cleanly with the real participant once dispatch finishes.
@@ -26,6 +27,7 @@ export const TEMPLATE_TO_UI_LINEAGE: Record<string, ReviewerLineage> = {
   opencode: "opencode",
   moonshot: "kimi",
   grok: "grok",
+  antigravity: "antigravity",
 };
 
 const STATUS_LABEL: Record<string, { text: string; color: string }> = {

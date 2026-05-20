@@ -22,7 +22,8 @@ export type ReviewerLineage =
   | "kimi"
   | "openrouter"
   | "local"
-  | "grok";
+  | "grok"
+  | "antigravity";
 
 export type AgreementThreshold = "unanimous" | "majority" | "any";
 export type ThresholdAction = "auto-finalize" | "ask-user";

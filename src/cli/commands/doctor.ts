@@ -61,6 +61,7 @@ function printReport(r: DoctorReport): void {
     'opencode-cli': 'opencode',
     'kimi-cli': 'kimi',
     'grok-cli': 'grok',
+    'antigravity-cli': 'agy',
   };
 
   console.log('');

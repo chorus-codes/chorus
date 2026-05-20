@@ -21,6 +21,7 @@ export const COCKPIT_TO_DAEMON: Record<ReviewerLineage, string> = {
   openrouter: "openrouter",
   local: "local",
   grok: "grok",
+  antigravity: "antigravity",
 };
 
 // `xai` is a legacy alias from older templates that grouped under cockpit
@@ -46,6 +47,7 @@ export const DAEMON_TO_COCKPIT: Record<string, ReviewerLineage> = {
   xai: "opencode",
   local: "local",
   grok: "grok",
+  antigravity: "antigravity",
 };
 
 export const DAEMON_DEFAULT_MODEL: Record<ReviewerLineage, string> = {
@@ -57,6 +59,7 @@ export const DAEMON_DEFAULT_MODEL: Record<ReviewerLineage, string> = {
   openrouter: "",
   local: "",
   grok: "grok-build",
+  antigravity: "gemini-3.5-flash",
 };
 
 const DEFAULT_PHASE: TemplatePhase = {
@@ -149,4 +152,5 @@ export const FALLBACK_LINEAGES = [
   "openrouter",
   "local",
   "grok",
+  "antigravity",
 ] as const satisfies readonly ReviewerLineage[];

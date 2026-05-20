@@ -395,6 +395,12 @@ Things that look like shortcuts but break things downstream:
 
 10. **Trusting `stopReason` to be a fixed value.** Parsers that emit `message_done` unconditionally in the `end` branch will treat `stopReason: "max_tokens"`, `"tool_use"`, or `"Error"` as a clean completion. If the CLI's spec documents multiple stop reasons, switch on them; if it only documents one (Grok docs only mention `EndTurn`), the conservative move is to log unrecognised values so a future contributor with paid access can file a useful bug report.
 
+11. **Assuming the CLI binary name matches the user-facing brand.** Antigravity ships as `agy` (Google's choice — short, distinct). The Antigravity IDE binary (`antigravity` at `~/.antigravity-server/.../remote-cli/antigravity`) is the VSCode-fork IDE, unrelated to the chat CLI. Map `BINARY_NAME['antigravity-cli'] = 'agy'`; do NOT match on the brand name. Probe `<bin> --help` to confirm the actual binary before wiring detection.
+
+12. **Same-vendor lineage collisions.** Google ships TWO first-party coding CLIs as of 2026-05: gemini-cli and Antigravity CLI. Both lineages should coexist (a user with both installed gets two Google voices in the reviewer fleet). Picking `google` as the daemon lineage for both would collapse them into one entry. The Antigravity integration uses a separate `antigravity` lineage so the two CLIs are distinguishable in the picker, on run-page cards, and for diversity scoring. Apply the same heuristic to any future second-CLI-from-same-vendor: separate lineage, separate brand colour, shared dot-family if visually appropriate (gemini=blue-400, antigravity=sky-400).
+
+13. **Locked-model CLIs.** Some CLIs (Antigravity is the canonical example) don't expose a `--model` flag — the binary picks the model. Still register a `gemini-3.5-flash`-style id in `UI_LINEAGE_DEFAULT_MODEL` and `UI_LINEAGE_AVAILABLE_MODELS` so the voices catalog and template dropdown stay consistent with single-model CLIs (claude, kimi, grok). The chorus-side model id is INFORMATIONAL for these; the runner doesn't pass it as an argv flag. Note this clearly in the shim's `runHeadless` comment so a future contributor doesn't add a `-m` argv.
+
 ---
 
 ## Verification matrix
@@ -425,6 +431,7 @@ Before opening a PR, every level should pass its corresponding row:
 ## Reference implementations
 
 - **Level 3 (subscription-gated CLI shim with verified failure path)**: `src/daemon/agents/grok.ts` + `src/daemon/agents/parsers/grok.ts` — Grok Build. Streaming-json output, env-var OR file-based auth, empirically-verified error path (`SuperGrok Heavy subscription required` → quota_exhausted), happy path inferred from official spec docs. Promoted from Level 2 in PR #46.
+- **Level 3 (plain-text CLI, locked model, subscription)**: `src/daemon/agents/antigravity.ts` + `src/daemon/agents/parsers/antigravity.ts` — Antigravity CLI (`agy`). NO streaming-json output mode exists — each stdout line is a text_delta. NO `--model` flag (locked to Gemini 3.5 Flash by Google). Subscription via `~/.gemini/antigravity-cli/antigravity-oauth-token`. Probed live 2026-05-20 on Google AI Pro. Shows the minimum-shim pattern for a CLI that doesn't expose structured output.
 - **Level 1 → 3 (HTTP-dispatched shim)**: `src/daemon/agents/local.ts` — Local LLM / Ollama. The most recent HTTP-shim integration; touch points are well-documented in PR #42.
 - **Level 1 → 3 (CLI/tmux shim)**: `src/daemon/agents/kimi.ts` — clean separation between tmux dispatch and headless invocation.
 - **Level 2 (consumer-only, auto-pickup)**: `src/daemon/orchestrators/grok.ts` (orchestrator side) — keep this when the CLI reads `~/.claude.json` natively even though you're also shipping a shim. Two-way wiring is OK.
