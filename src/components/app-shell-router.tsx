@@ -34,7 +34,12 @@ interface AppShellRouterProps {
  * a single long-lived instance.
  */
 export function AppShellRouter({ children }: AppShellRouterProps) {
-  const pathname = usePathname();
+  // usePathname() returns `null` during the brief client-render window
+  // before App Router has hydrated. Coalescing to "" makes `startsWith`
+  // safe and falls through to the wrapped (sidebar-present) branch by
+  // default — better than crashing the entire shell with a TypeError.
+  // PR #75 audit caught this (opencode-cli-2 finding #1, HIGH).
+  const pathname = usePathname() ?? "";
   const standalone = STANDALONE_ROUTES.some((p) =>
     p === pathname || pathname.startsWith(`${p}/`),
   );

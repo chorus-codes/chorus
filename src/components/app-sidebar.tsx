@@ -16,7 +16,7 @@ import {
   ArrowUpCircle,
 } from "lucide-react";
 import { TriadLogo } from "@/components/triad-logo";
-import { listChats, DaemonError } from "@/lib/api";
+import { listChats } from "@/lib/api";
 import { chatDisplayTitle } from "@/lib/chat-title";
 import {
   readCollapsed,
@@ -123,9 +123,14 @@ export function SidebarBody({ onNavigate, collapsed = false, onToggleCollapsed }
         if (cancelled) return;
         setChats(list);
         setChatsState("ready");
-      } catch (err) {
+      } catch {
         if (cancelled) return;
-        setChatsState(err instanceof DaemonError ? "error" : "error");
+        // Same display for known daemon-down vs unexpected errors —
+        // the dead `instanceof DaemonError` ternary that used to live
+        // here had both branches equal to "error". If we ever want to
+        // differentiate (e.g. "Daemon offline" vs "Something broke")
+        // add a new `chatsState` variant first.
+        setChatsState("error");
       }
     };
 
