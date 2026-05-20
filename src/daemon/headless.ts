@@ -708,6 +708,26 @@ export function spawnHeadless(opts: SpawnHeadlessOptions): HeadlessRun {
   );
 
   // ─── async iterator ────────────────────────────────────────────────────
+  //
+  // The custom iterator implements `return()` and `throw()` in addition to
+  // `next()` so `for await` consumers that break early — or whose body
+  // throws — tear the subprocess down via SIGTERM instead of letting it
+  // run as a background orphan.
+  //
+  // Without these methods, the runtime's automatic cleanup walks away
+  // and the child CLI keeps consuming subscription quota / API tokens
+  // until either the spawnHeadless `timeoutMs` fires or the daemon
+  // restarts. PR #70 audit (antigravity-cli-8 finding #1, marked
+  // CRITICAL) caught this.
+  //
+  // `sigtermThenKill` is idempotent (its own `killReason` guard), so
+  // calling it on dispose even after a natural close is safe — the
+  // `closed` check below is a fast-path optimisation, not correctness.
+  const disposeIterator = (reason: string): void => {
+    if (closed) return;
+    sigtermThenKill(reason);
+  };
+
   const events: AsyncIterable<AgentEvent> = {
     [Symbol.asyncIterator](): AsyncIterator<AgentEvent> {
       return {
@@ -722,6 +742,21 @@ export function spawnHeadless(opts: SpawnHeadlessOptions): HeadlessRun {
             return { value, done: false };
           }
           return { value: undefined, done: true };
+        },
+        async return(): Promise<IteratorResult<AgentEvent>> {
+          // `for await ... break`, manual `iter.return()`, or generator
+          // early-completion. Tear the subprocess down so the underlying
+          // CLI doesn't keep running to completion against a consumer
+          // that has stopped listening.
+          disposeIterator('iterator_disposed');
+          return { value: undefined, done: true };
+        },
+        async throw(err?: unknown): Promise<IteratorResult<AgentEvent>> {
+          // Consumer's `for await` body threw — same cleanup as
+          // early-break. Re-throw so the caller's catch / rethrow chain
+          // still sees the original error.
+          disposeIterator('iterator_threw');
+          throw err;
         },
       };
     },
