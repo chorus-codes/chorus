@@ -2,6 +2,7 @@ import { spawn } from 'child_process';
 import type { Command } from 'commander';
 import fs from 'fs';
 import path from 'path';
+import { isPidAlive, readDaemonInfo } from '../../lib/daemon-discovery.js';
 import { pkg } from '../shared.js';
 import { c, header, sym } from '../ui.js';
 
@@ -128,6 +129,20 @@ export function registerUpdateCommand(program: Command): void {
           args.push('--prefix', prefix);
         }
 
+        // Snapshot whether a daemon was running BEFORE install. After
+        // npm replaces the binary on disk, the in-process pkg.version
+        // is still the old one but spawn() of `chorus` will resolve to
+        // the new file. Capture daemon state first so we know whether
+        // to restart.
+        const preInstallDaemon = readDaemonInfo();
+        const daemonWasRunning = !!(
+          preInstallDaemon && isPidAlive(preInstallDaemon.daemonPid)
+        );
+        const cockpitWasRunning = !!(
+          preInstallDaemon?.cockpitPid &&
+          isPidAlive(preInstallDaemon.cockpitPid)
+        );
+
         // Hand stdio to npm so the user sees its progress + any errors
         // (EACCES, network, etc.). spawn rather than execFile so we can
         // stream output as it happens.
@@ -140,12 +155,38 @@ export function registerUpdateCommand(program: Command): void {
           child.on('error', reject);
         });
 
+        // Auto-restart the daemon if it was running before the install.
+        // Without this, the user sees "Updated to v0.8.43" but `chorus
+        // start` still reports the old daemon running on the prior
+        // version — Victor's exact pain on 2026-05-20.
+        //
+        // The newly-installed chorus binary is on disk now (npm
+        // completed). Spawning it via PATH picks up the new code.
+        // start.ts has its own drift detection too (defence in depth);
+        // here we just trigger the restart deliberately so the user
+        // doesn't have to think about it.
+        if (daemonWasRunning) {
+          console.log('');
+          console.log(
+            header(
+              sym.pointer,
+              `Restarting daemon on v${latest}`,
+              cockpitWasRunning ? 'cockpit will come back up' : 'daemon-only',
+            ),
+          );
+          await runChorusSubcommand(['stop']);
+          const startArgs = cockpitWasRunning ? ['start'] : ['start', '--daemon-only'];
+          await runChorusSubcommand(startArgs);
+        }
+
         console.log('');
         console.log(
           header(
             sym.ok,
             `Updated to chorus ${latest}`,
-            'restart any running daemon: chorus stop && chorus start',
+            daemonWasRunning
+              ? 'daemon restarted on the new version'
+              : 'no daemon was running',
           ),
         );
         console.log('');
@@ -166,6 +207,31 @@ export function registerUpdateCommand(program: Command): void {
         process.exit(1);
       }
     });
+}
+
+/**
+ * Spawn a chorus subcommand (`stop`, `start`, etc.) using the binary
+ * already on PATH and wait for it to finish. Used by the post-install
+ * restart sequence so the *newly-installed* chorus runs the spawn —
+ * not the in-process old build.
+ *
+ * Stdio inherited so the user sees the same output as if they'd run
+ * the subcommand directly. Non-zero exit is surfaced via reject so the
+ * outer try/catch in registerUpdateCommand reports a clear failure.
+ */
+async function runChorusSubcommand(args: string[]): Promise<void> {
+  const binary = process.platform === 'win32' ? 'chorus.cmd' : 'chorus';
+  await new Promise<void>((resolve, reject) => {
+    const child = spawn(binary, args, {
+      stdio: 'inherit',
+      shell: process.platform === 'win32',
+    });
+    child.on('exit', (code) => {
+      if (code === 0 || code === null) resolve();
+      else reject(new Error(`chorus ${args.join(' ')} exited with code ${code}`));
+    });
+    child.on('error', reject);
+  });
 }
 
 /**
