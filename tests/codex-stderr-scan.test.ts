@@ -37,7 +37,7 @@ describe('scanCodexStderr', () => {
 
   it('detects token_refresh_lost case-insensitively', () => {
     expect(
-      scanCodexStderr('Access Token Could Not Be Refreshed'),
+      scanCodexStderr('ERROR: Access Token Could Not Be Refreshed'),
     ).not.toBeNull();
   });
 
@@ -46,18 +46,33 @@ describe('scanCodexStderr', () => {
     // Either match is fine — the goal is fast-fail with a structured kind.
     const stderr =
       'ERROR: access token could not be refreshed\n' +
-      'WARNING: handshaking with MCP server failed too\n';
+      'ERROR: handshaking with MCP server failed too\n';
     const hit = scanCodexStderr(stderr);
     expect(hit!.kind).toBe('token_refresh_lost');
   });
 
   it('detects mcp_handshake_failed on the canonical phrase', () => {
     const hit = scanCodexStderr(
-      '... codex error: handshaking with MCP server failed: connection refused\n',
+      'ERROR: handshaking with MCP server failed: connection refused\n',
     );
     expect(hit).not.toBeNull();
     expect(hit!.kind).toBe('mcp_handshake_failed');
     expect(hit!.message).toMatch(/handshaking with MCP server failed/i);
+  });
+
+  it('does NOT match without the ERROR: / failed prefix anchor', () => {
+    // A warning or docstring mentioning the phrase shouldn't kill the
+    // subprocess (audit reviewer raised this risk — false-positives
+    // here would re-introduce a worse failure mode than the bug we're
+    // trying to fix).
+    expect(
+      scanCodexStderr(
+        'INFO: access token could not be refreshed mechanism is deprecated\n',
+      ),
+    ).toBeNull();
+    expect(
+      scanCodexStderr('See docs at https://example.com/access-tokens\n'),
+    ).toBeNull();
   });
 
   it('does NOT match ambiguous "API error" or transient 5xx', () => {
@@ -72,17 +87,11 @@ describe('scanCodexStderr', () => {
   });
 
   it('does NOT match echoed user prompts containing similar phrases', () => {
-    // codex `exec -` reads the prompt from stdin and doesn't echo it,
-    // but a prompt mentioning the error phrase routed elsewhere should
-    // still be safe. This is belt-and-braces: stderr is for codex, not
-    // for prompts.
+    // The anchor on `ERROR:` means even if codex started echoing prompts
+    // to stderr, a prompt mentioning the error phrase wouldn't trip the
+    // fast-fail unless prefixed by the literal codex error tag.
     const prompt =
       'Review this code where I added a comment that says "// could not be refreshed"';
-    // The scanner is matching on the stderr buffer, but if codex ever
-    // started echoing prompts to stderr, the loose substring match would
-    // false-positive. We accept that risk — scope is limited to known
-    // codex stderr signatures, prompts elsewhere don't reach this path.
-    // This test documents the regex breadth.
     expect(scanCodexStderr(prompt)).toBeNull();
   });
 });

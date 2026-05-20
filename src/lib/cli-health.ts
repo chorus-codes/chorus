@@ -87,6 +87,15 @@ export async function getAllHealth(): Promise<CliHealth[]> {
 }
 
 /**
+ * Type guard for the headless doer/reviewer paths to gate recordHealth
+ * calls. Avoids duplicating the ALL_LINEAGES list in every consumer
+ * (any new lineage we add here is picked up everywhere automatically).
+ */
+export function isKnownHealthLineage(lineage: string): lineage is CliLineage {
+  return (ALL_LINEAGES as readonly string[]).includes(lineage);
+}
+
+/**
  * Sweep cli-health entries and reset any whose `resetAt` has passed.
  * Called periodically from the reaper so the home-page fleet card flips
  * back to green automatically once a quota window expires — no refresh,

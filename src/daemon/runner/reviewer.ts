@@ -16,26 +16,11 @@ import { getPermissions } from '../../lib/settings/permissions.js';
 import {
   classifyOpenRouterError,
   getHealth,
+  isKnownHealthLineage,
   kindToStatus,
   recordHealth,
   type CliLineage,
 } from '../../lib/cli-health.js';
-
-const KNOWN_HEALTH_LINEAGES: readonly CliLineage[] = [
-  'anthropic',
-  'openai',
-  'google',
-  'opencode',
-  'moonshot',
-  'openrouter',
-  'local',
-  'grok',
-  'antigravity',
-];
-
-function isKnownHealthLineage(lineage: string): lineage is CliLineage {
-  return (KNOWN_HEALTH_LINEAGES as readonly string[]).includes(lineage);
-}
 import { synthesizeCostUsd } from '../../lib/model-pricing.js';
 import { StreamFileWriter } from './stream-file-writer.js';
 import { verdictFromReviewerText } from './verdict.js';

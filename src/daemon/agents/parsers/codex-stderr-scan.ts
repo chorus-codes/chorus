@@ -23,28 +23,40 @@
  * here).
  */
 
+// Anchored to codex's literal `ERROR:` prefix so warnings or docs that
+// merely mention the phrase ("access token could not be refreshed
+// mechanism is deprecated") never trip the fast-fail. False-positive
+// here means a healthy session gets SIGTERMed mid-stream, so the
+// anchor matters. Same anchoring discipline as parseCodex's quota
+// regex (CODEX_QUOTA_LINE).
+const REFRESH_TOKEN_LINE =
+  /ERROR:[^\n]*access token could not be refreshed[^\n]*/i;
+const MCP_HANDSHAKE_LINE =
+  /(?:ERROR|failed)[^\n]*handshaking with MCP server failed[^\n]*/i;
+
 export function scanCodexStderr(
   stderrSoFar: string,
 ): { kind: string; message: string } | null {
-  // Pattern: auth refresh lost — codex's "Your access token could not be
-  // refreshed because your refresh token was already used." Single
-  // occurrence is enough; codex always exits eventually but takes ~8 min.
-  if (/access token could not be refreshed/i.test(stderrSoFar)) {
-    const match = /access token could not be refreshed[^\n]*/i.exec(stderrSoFar);
+  // Pattern: auth refresh lost — codex's "ERROR: Your access token could
+  // not be refreshed because your refresh token was already used."
+  // Single occurrence is enough; codex always exits eventually but
+  // takes ~8 min on this path.
+  const refresh = REFRESH_TOKEN_LINE.exec(stderrSoFar);
+  if (refresh) {
     return {
       kind: 'token_refresh_lost',
-      message: match?.[0] ?? 'Codex auth invalidated (token refresh race).',
+      message: refresh[0],
     };
   }
 
   // Pattern: MCP handshake failure — codex tried to attach to an MCP
   // server (often user-config'd, even with --ignore-user-config) and
   // bailed. Same fast-fail story; reauth recovers.
-  if (/handshaking with MCP server failed/i.test(stderrSoFar)) {
-    const match = /handshaking with MCP server failed[^\n]*/i.exec(stderrSoFar);
+  const handshake = MCP_HANDSHAKE_LINE.exec(stderrSoFar);
+  if (handshake) {
     return {
       kind: 'mcp_handshake_failed',
-      message: match?.[0] ?? 'Codex MCP startup failed.',
+      message: handshake[0],
     };
   }
 

@@ -541,7 +541,16 @@ export function spawnHeadless(opts: SpawnHeadlessOptions): HeadlessRun {
           }
         }
 
-        if (killReason && code !== 0) {
+        // Early-abort path already enqueued the SPECIFIC error event
+        // (e.g. token_refresh_lost) BEFORE sending SIGTERM. The exit
+        // handler must NOT add a second generic "cancelled" / "cli_failed"
+        // event on top — downstream consumers (reviewer.ts / doer.ts)
+        // process every error event and would overwrite the structured
+        // kind with the generic one. Skip the cli_failed branch too for
+        // the same reason.
+        if (killReason === 'early_abort') {
+          // already emitted; nothing further to surface
+        } else if (killReason && code !== 0) {
           enqueue({
             type: 'error',
             kind: killReason,
