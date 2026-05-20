@@ -236,6 +236,13 @@ export function registerSettingsRoutes(fastify: FastifyInstance): void {
       };
       const validated = ChatConcurrencySchema.parse(merged);
       await setChatConcurrency(validated);
+      // Poke the gate so a loosened cap (3 → 5, or 1024MB → 512MB)
+      // admits queued waiters immediately. Without this, queued chats
+      // would wait for an active chat to finish before the new cap
+      // takes effect — surprising UX. Convergent self-review (2/6
+      // reviewers on PR #64) flagged the gap.
+      const { pokeGate } = await import('../chat-gate.js');
+      pokeGate();
       return successResponse(validated);
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Unknown error';

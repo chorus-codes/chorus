@@ -14,6 +14,7 @@ import { describe, expect, it, beforeEach, afterEach, vi } from 'vitest';
 import {
   admitChat,
   evaluateAdmission,
+  pokeGate,
   snapshot,
   _testing,
   type AdmitDecision,
@@ -60,12 +61,24 @@ describe('evaluateAdmission — pure constraint logic', () => {
     expect(decision.message).toContain('512');
   });
 
-  it('treats swap=0 as "platform reports no swap" — skips the swap check', () => {
-    // macOS / containers without /proc/meminfo. Don't penalise the
-    // user by refusing every chat.
-    expect(evaluateAdmission(0, { ...STATS_OK, swapFreeMb: 0 }, cfg)).toEqual({
+  it('treats swap=-1 as "platform reports nothing" — skips the swap check', () => {
+    // macOS / containers without /proc/meminfo. The reader returns -1
+    // for "no data"; the gate must not block on that — would refuse
+    // every chat on those platforms.
+    expect(evaluateAdmission(0, { ...STATS_OK, swapFreeMb: -1 }, cfg)).toEqual({
       admit: true,
     });
+  });
+
+  it('treats swap=0 as GENUINELY EXHAUSTED — blocks (incident-2026-05-20 case)', () => {
+    // The exact failure mode the gate was built to catch: SwapFree
+    // genuinely 0 kB on Linux when the host is OOM-imminent. The
+    // prior revision used 0 as a sentinel and silently admitted at
+    // this point. Convergent self-review (PR #64, 4/6 reviewers)
+    // flagged it as the most dangerous case to get wrong.
+    const decision = evaluateAdmission(0, { ...STATS_OK, swapFreeMb: 0 }, cfg);
+    expect(decision.admit).toBe(false);
+    expect(decision.reason).toBe('swap_low');
   });
 
   it('skips swap check when swapMinFreeMb is 0 (user disabled)', () => {
@@ -100,6 +113,15 @@ describe('evaluateAdmission — pure constraint logic', () => {
       cfg,
     );
     expect(decision.reason).toBe('chats_at_cap');
+  });
+
+  it('handles cpuCount=0 by skipping the load check (no divide-by-zero)', () => {
+    // Defensive — corrupted /proc/cpuinfo or hypervisor edge case.
+    // The guard `stats.cpuCount > 0` should prevent the division
+    // entirely; verify the chat is admitted rather than crashing.
+    expect(
+      evaluateAdmission(0, { swapFreeMb: 8192, loadAvg1: 999, cpuCount: 0 }, cfg),
+    ).toEqual({ admit: true });
   });
 
   it('scales load check by CPU count (per-core)', () => {
@@ -247,5 +269,38 @@ describe('admitChat — gate semantics', () => {
     ac.abort();
     await expect(admitChat({ signal: ac.signal })).rejects.toBeDefined();
     expect(snapshot().activeChats).toBe(0);
+  });
+
+  it('pokeGate admits queued chats when settings loosen the cap', async () => {
+    // Settings change use case: user has cap=1, fires 3 chats. Chats
+    // 2+3 queue. User bumps cap=3 in Settings. Without pokeGate, the
+    // queued chats wait for chat 1 to finish — that could be minutes.
+    // With pokeGate, the PUT route triggers re-evaluation immediately.
+    await setChatConcurrency({
+      maxConcurrentChats: 1,
+      swapMinFreeMb: 0,
+      loadAvgMaxPerCore: 0,
+    });
+    const r1 = await admitChat();
+    const p2 = admitChat();
+    const p3 = admitChat();
+
+    await new Promise((res) => setTimeout(res, 10));
+    expect(snapshot().queueDepth).toBe(2);
+
+    // Loosen the cap — without pokeGate the queue would stay blocked.
+    await setChatConcurrency({
+      maxConcurrentChats: 3,
+      swapMinFreeMb: 0,
+      loadAvgMaxPerCore: 0,
+    });
+    pokeGate();
+
+    const r2 = await p2;
+    const r3 = await p3;
+    expect(snapshot().activeChats).toBe(3);
+    r1();
+    r2();
+    r3();
   });
 });

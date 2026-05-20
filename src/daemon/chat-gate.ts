@@ -68,12 +68,16 @@ export function evaluateAdmission(
       message: `${activeChats}/${config.maxConcurrentChats} chats already running`,
     };
   }
-  // 0 disables the check — boxes without swap, CI containers, macOS
-  // without /proc/meminfo. The default 1024 MB is a sensible floor for
-  // a typical Linux host; users on tight boxes can lower it.
+  // swapMinFreeMb=0 → user disabled the check.
+  // stats.swapFreeMb=-1 → platform doesn't expose swap (macOS,
+  //   containers without /proc/meminfo) — skip rather than block.
+  // stats.swapFreeMb=0 → swap is genuinely exhausted; THIS is the
+  //   incident-2026-05-20 case we MUST catch (prior revision used 0
+  //   as a sentinel and silently bypassed the check at the worst
+  //   possible moment).
   if (
     config.swapMinFreeMb > 0 &&
-    stats.swapFreeMb > 0 &&
+    stats.swapFreeMb >= 0 &&
     stats.swapFreeMb < config.swapMinFreeMb
   ) {
     return {
@@ -186,7 +190,21 @@ async function tryGrantHead(): Promise<void> {
       }
     } while (dirty);
   } catch (err) {
+    // Settings DB unreadable, resource stats read failed, anything
+    // unexpected. Pre-fix this just logged and exited, leaving the
+    // queue stranded — convergent self-review (6/6 reviewers on PR
+    // #64) flagged this. Two-pronged recovery:
+    //   1. Schedule a recheck so the queue gets another chance once
+    //      the transient issue clears.
+    //   2. If the failure persists, the recheck will hit the same
+    //      catch again; that's acceptable — better a noisy log than
+    //      a silently stalled queue. For a circuit-breaker we'd add
+    //      a consecutive-failure counter, but the simpler retry
+    //      handles the common DB-busy / disk-blip cases.
     console.error('[chorus] chat-gate tryGrantHead failed:', err);
+    if (waiters.length > 0) {
+      scheduleRecheck();
+    }
   } finally {
     granting = false;
   }
@@ -217,9 +235,24 @@ export async function admitChat(
       return;
     }
 
+    // settled flag prevents double-resolution if abort fires AFTER
+    // tryGrantHead has shifted+resolved this waiter but BEFORE the
+    // resolve's microtask runs. Node tolerates redundant resolve/
+    // reject calls on a settled promise, but a future Promise impl
+    // change could surface it as an unhandled rejection — belt-and-
+    // suspenders. Convergent self-review (PR #64, ocg-4) flagged it.
+    let settled = false;
     const waiter: Waiter = {
-      resolve: () => resolve(makeRelease()),
-      reject,
+      resolve: () => {
+        if (settled) return;
+        settled = true;
+        resolve(makeRelease());
+      },
+      reject: (err: unknown) => {
+        if (settled) return;
+        settled = true;
+        reject(err);
+      },
       onWait: opts.onWait,
     };
 
@@ -229,7 +262,7 @@ export async function admitChat(
         if (i >= 0) waiters.splice(i, 1);
         // Re-poke in case the abort frees up something at the head.
         void tryGrantHead();
-        reject(opts.signal!.reason ?? new Error('aborted'));
+        waiter.reject(opts.signal!.reason ?? new Error('aborted'));
       };
       opts.signal.addEventListener('abort', onAbort, { once: true });
       waiter.cleanup = (): void => opts.signal!.removeEventListener('abort', onAbort);
@@ -262,6 +295,19 @@ export function snapshot(): {
     activeChats,
     queueDepth: waiters.length,
   };
+}
+
+/**
+ * External poke for "settings changed, re-evaluate the queue". Called
+ * by the PUT /settings/chat-concurrency route after a successful save
+ * so that an increased maxConcurrentChats / loosened swap floor /
+ * loosened load cap admits queued chats immediately — without it,
+ * users bumping the cap up would have to wait for an active chat to
+ * end before queued chats could proceed. Convergent self-review
+ * (2/6 reviewers on PR #64) flagged the gap.
+ */
+export function pokeGate(): void {
+  void tryGrantHead();
 }
 
 export const _testing = {

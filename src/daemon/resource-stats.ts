@@ -17,7 +17,17 @@ import * as fs from 'node:fs';
 import { cpus, loadavg, platform } from 'node:os';
 
 export interface ResourceStats {
-  /** Free swap in MB. 0 on platforms without /proc/meminfo. */
+  /**
+   * Free swap in MB. -1 on platforms without /proc/meminfo (macOS,
+   * containers) — caller treats `-1` as "skip the swap check".
+   *
+   * Critically: 0 is NOT a sentinel. 0 means "swap is genuinely
+   * exhausted" — exactly the failure mode the gate was built to catch
+   * (2026-05-20 incident: Linux host with SwapFree=24kB hung on swap
+   * thrash). Convergent self-review (4/6 reviewers on PR #64) caught
+   * the original sentinel-0 bug, which would have made the gate admit
+   * chats at the moment of maximum vulnerability.
+   */
   swapFreeMb: number;
   /** 1-minute load average. */
   loadAvg1: number;
@@ -26,21 +36,19 @@ export interface ResourceStats {
 }
 
 /**
- * Read free swap from /proc/meminfo. Returns 0 on non-Linux or if the
- * file is unreadable / malformed. Caller treats 0 as "swap-check
- * skipped" — combined with the gate's swap=0 disabled semantics, a
- * macOS / container without /proc/meminfo effectively bypasses the
- * swap guard rather than blocking every chat.
+ * Read free swap from /proc/meminfo. Returns -1 (not 0) when
+ * unavailable so callers can distinguish "platform reports nothing"
+ * from "SwapFree is genuinely 0 — host is OOM-imminent".
  */
 function readSwapFreeMb(): number {
-  if (platform() !== 'linux') return 0;
+  if (platform() !== 'linux') return -1;
   try {
     const meminfo = fs.readFileSync('/proc/meminfo', 'utf-8');
     const match = meminfo.match(/^SwapFree:\s+(\d+)\s+kB/m);
-    if (!match) return 0;
+    if (!match) return -1;
     return Math.floor(parseInt(match[1], 10) / 1024);
   } catch {
-    return 0;
+    return -1;
   }
 }
 

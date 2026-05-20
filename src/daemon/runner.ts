@@ -145,11 +145,18 @@ export async function runChat(opts: PhaseRunnerOptions): Promise<void> {
     releaseAdmission = await admitChat({
       signal: abortSignal,
       onWait: (decision, position) => {
+        // decision.reason is always populated when admit=false (the
+        // gate guarantees this — see evaluateAdmission). The `??`
+        // fallback is a defensive no-op; we keep it to satisfy the
+        // type checker without inventing a sentinel string that
+        // isn't in AdmitDenyReason.
+        const reason: 'chats_at_cap' | 'swap_low' | 'load_high' =
+          decision.reason ?? 'chats_at_cap';
         onEvent({
           chatId,
           type: 'chat_queued',
           payload: {
-            reason: decision.reason ?? 'unknown',
+            reason,
             position,
             message: decision.message ?? '',
           },

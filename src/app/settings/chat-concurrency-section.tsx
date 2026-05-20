@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Layers } from "lucide-react";
+import { Layers, Minus, Plus } from "lucide-react";
 import {
   getChatConcurrencySettings,
   updateChatConcurrencySettings,
@@ -65,7 +65,17 @@ export function ChatConcurrencySection() {
     setError(null);
     try {
       const next = await updateChatConcurrencySettings(patch);
-      setData((prev) => ({ ...next, live: prev?.live }));
+      // Merge over the previous state — the PUT response carries
+      // only the validated knob values, not `defaults` or `live`.
+      // Without the prev merge, the UI's default-hint lines vanish
+      // after the first save until the next polling GET. Self-review
+      // (PR #64, codex-cli-0) caught it.
+      setData((prev) => ({
+        ...prev,
+        ...next,
+        defaults: next.defaults ?? prev?.defaults,
+        live: prev?.live,
+      }));
     } catch (err) {
       setError(err instanceof Error ? err.message : "Save failed.");
     } finally {
@@ -234,9 +244,9 @@ function NumberField({ id, min, max, step = 1, value, disabled, onCommit }: Numb
         onClick={dec}
         disabled={disabled || value <= min}
         aria-label={`Decrease ${id}`}
-        className="px-2.5 py-1.5 text-sm text-muted-foreground transition hover:text-foreground disabled:opacity-30"
+        className="flex items-center justify-center px-2.5 py-1.5 text-muted-foreground transition hover:text-foreground disabled:opacity-30"
       >
-        −
+        <Minus className="h-3.5 w-3.5" />
       </button>
       <input
         id={id}
@@ -250,9 +260,9 @@ function NumberField({ id, min, max, step = 1, value, disabled, onCommit }: Numb
         onClick={inc}
         disabled={disabled || value >= max}
         aria-label={`Increase ${id}`}
-        className="px-2.5 py-1.5 text-sm text-muted-foreground transition hover:text-foreground disabled:opacity-30"
+        className="flex items-center justify-center px-2.5 py-1.5 text-muted-foreground transition hover:text-foreground disabled:opacity-30"
       >
-        +
+        <Plus className="h-3.5 w-3.5" />
       </button>
     </div>
   );
