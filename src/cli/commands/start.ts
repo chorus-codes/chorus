@@ -219,21 +219,26 @@ type AlreadyRunningResult =
 
 /**
  * Pure version comparator used for drift detection. Returns true when
- * `cliVersion` is strictly newer than `daemonVersion`. Pre-release
- * suffixes (1.2.3-rc.1) sort below the matching release.
+ * `cliVersion` is strictly newer than `daemonVersion`.
  *
- * Sits next to alreadyRunningHealthy rather than importing from update.ts
- * to avoid the start↔update cycle (start already imports `versionGreater`
- * from update.ts; this helper handles undefined / missing daemon versions
- * which the original doesn't, so a small wrapper keeps that policy here).
+ * Adds two policies on top of plain numeric semver compare (which is
+ * what `versionGreater` already does):
+ *   1. Missing / null / empty daemon version → treated as older. A
+ *      pre-0.7 daemon (no `version` field in daemon.json) gets
+ *      restarted on the next `chorus start`, picking up whatever the
+ *      currently-installed CLI is.
+ *   2. Equal versions → not older. No restart when versions match.
+ *
+ * Pre-release suffixes (1.2.3-rc.1) are NOT handled — the underlying
+ * `versionGreater` does naive split-on-dot + parseInt, so any non-numeric
+ * tail compares as zero. The CLI only publishes plain semver to npm
+ * latest, so this hasn't bitten us yet; flagged for follow-up if we
+ * ever ship RC tags.
  */
 export function isDaemonOlderThanCli(
   daemonVersion: string | null | undefined,
   cliVersion: string,
 ): boolean {
-  // Missing version field means the daemon was started by a build that
-  // didn't record it (pre-0.7 had no daemon.json). Treat as drifted so
-  // the user gets the fresh binary.
   if (!daemonVersion) return true;
   if (daemonVersion === cliVersion) return false;
   return versionGreater(cliVersion, daemonVersion);
@@ -243,9 +248,8 @@ export function isDaemonOlderThanCli(
  * Tear down a drifted daemon in-process so start can immediately respawn
  * on the current CLI's code. Mirrors the kill path in `chorus stop` but
  * lives inline because chained `chorus stop && chorus start` invocations
- * are exactly the pain we're removing — users have to know to do it, and
- * if they don't, daemon stays stale until they figure it out (Victor on
- * 2026-05-20).
+ * are exactly the pain we're removing — if the user has to know to run
+ * stop first, the auto-restart UX win is gone.
  *
  * Best-effort: failures during kill don't abort the start. The downstream
  * spawn picks fresh ports if the old ones are still bound, and the port

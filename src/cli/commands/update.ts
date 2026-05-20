@@ -158,13 +158,13 @@ export function registerUpdateCommand(program: Command): void {
         // Auto-restart the daemon if it was running before the install.
         // Without this, the user sees "Updated to v0.8.43" but `chorus
         // start` still reports the old daemon running on the prior
-        // version — Victor's exact pain on 2026-05-20.
+        // version (the reported UX bug this PR exists to fix).
         //
-        // The newly-installed chorus binary is on disk now (npm
-        // completed). Spawning it via PATH picks up the new code.
-        // start.ts has its own drift detection too (defence in depth);
-        // here we just trigger the restart deliberately so the user
-        // doesn't have to think about it.
+        // Spawn the absolute path to the newly-installed binary rather
+        // than `chorus` from PATH. PATH ordering is unreliable on hosts
+        // with multiple chorus installs (sudo prefix vs nvm prefix);
+        // start.ts has drift detection as a backstop, but spawning the
+        // right binary the first time avoids a confusing double-restart.
         if (daemonWasRunning) {
           console.log('');
           console.log(
@@ -174,9 +174,15 @@ export function registerUpdateCommand(program: Command): void {
               cockpitWasRunning ? 'cockpit will come back up' : 'daemon-only',
             ),
           );
-          await runChorusSubcommand(['stop']);
+          const installedBinary = resolveInstalledChorusBinary(prefix);
+          // `stop` is tolerant: if the daemon died during the npm
+          // install window (~30-90s; OOM kill, manual stop), the stop
+          // step would otherwise reject and abort the restart with a
+          // confusing "exit code 1" after we already printed the
+          // "Restarting daemon" header.
+          await runChorusSubcommand(['stop'], { binaryPath: installedBinary, tolerant: true });
           const startArgs = cockpitWasRunning ? ['start'] : ['start', '--daemon-only'];
-          await runChorusSubcommand(startArgs);
+          await runChorusSubcommand(startArgs, { binaryPath: installedBinary });
         }
 
         console.log('');
@@ -210,27 +216,89 @@ export function registerUpdateCommand(program: Command): void {
 }
 
 /**
- * Spawn a chorus subcommand (`stop`, `start`, etc.) using the binary
- * already on PATH and wait for it to finish. Used by the post-install
- * restart sequence so the *newly-installed* chorus runs the spawn —
- * not the in-process old build.
+ * Compute the absolute path to the chorus binary at a known npm prefix.
+ * Layout matches the install structure documented in detectNpmPrefix:
+ *   POSIX:   <prefix>/lib/node_modules/chorus-codes/bin/chorus.mjs
+ *            <prefix>/bin/chorus  (symlink to the .mjs)
+ *   Windows: <prefix>/node_modules/chorus-codes/bin/chorus.mjs
+ *            <prefix>/chorus.cmd  (shim)
+ *
+ * Returns null when the expected binary isn't found — caller falls
+ * back to PATH resolution (best effort).
+ *
+ * Why this exists: convergent self-review (4/6 reviewers on PR #60)
+ * flagged that spawning `chorus` from raw PATH after `npm install -g`
+ * is unreliable in multi-install scenarios (sudo prefix + nvm prefix).
+ * npm updates the binary at its target prefix but doesn't touch PATH
+ * ordering — so a stale `chorus` earlier in PATH would be invoked
+ * instead of the freshly-installed one. Ironic given this is the
+ * exact bug PR #60 is fixing, just from the opposite direction.
+ * Spawning the absolute path at the install prefix sidesteps PATH
+ * entirely.
+ */
+function resolveInstalledChorusBinary(prefix: string | null): string | null {
+  if (!prefix) return null;
+  const win32 = process.platform === 'win32';
+  const candidates = win32
+    ? [
+        path.join(prefix, 'chorus.cmd'),
+        path.join(prefix, 'node_modules', 'chorus-codes', 'bin', 'chorus.mjs'),
+      ]
+    : [
+        path.join(prefix, 'bin', 'chorus'),
+        path.join(prefix, 'lib', 'node_modules', 'chorus-codes', 'bin', 'chorus.mjs'),
+      ];
+  for (const candidate of candidates) {
+    if (fs.existsSync(candidate)) return candidate;
+  }
+  return null;
+}
+
+/**
+ * Spawn a chorus subcommand (`stop`, `start`, etc.) using the
+ * *just-installed* binary at the resolved prefix, falling back to PATH
+ * when no prefix can be determined (dev checkouts).
+ *
+ * Tolerant flag: when `tolerant: true`, non-zero exits resolve instead
+ * of reject. Used by the post-install restart for the `stop` step,
+ * where the daemon may have died during the npm install window and
+ * `chorus stop` would otherwise abort the restart sequence — leaving
+ * the user staring at a "Restarting daemon" header followed by an
+ * error. (Self-review finding from 4/6 reviewers on PR #60.)
  *
  * Stdio inherited so the user sees the same output as if they'd run
- * the subcommand directly. Non-zero exit is surfaced via reject so the
- * outer try/catch in registerUpdateCommand reports a clear failure.
+ * the subcommand directly.
  */
-async function runChorusSubcommand(args: string[]): Promise<void> {
-  const binary = process.platform === 'win32' ? 'chorus.cmd' : 'chorus';
+async function runChorusSubcommand(
+  args: string[],
+  opts: { binaryPath?: string | null; tolerant?: boolean } = {},
+): Promise<void> {
+  const resolved = opts.binaryPath ?? null;
+  const win32 = process.platform === 'win32';
+  // .mjs entrypoints need node; the symlink/cmd shim is self-executing.
+  const isMjs = resolved !== null && resolved.endsWith('.mjs');
+  const command = isMjs ? process.execPath : (resolved ?? (win32 ? 'chorus.cmd' : 'chorus'));
+  const spawnArgs = isMjs && resolved ? [resolved, ...args] : args;
+
   await new Promise<void>((resolve, reject) => {
-    const child = spawn(binary, args, {
+    const child = spawn(command, spawnArgs, {
       stdio: 'inherit',
-      shell: process.platform === 'win32',
+      shell: !isMjs && win32,
     });
     child.on('exit', (code) => {
       if (code === 0 || code === null) resolve();
-      else reject(new Error(`chorus ${args.join(' ')} exited with code ${code}`));
+      else if (opts.tolerant) {
+        // Daemon was probably gone already; the subsequent `start`
+        // will spawn a fresh one regardless.
+        resolve();
+      } else {
+        reject(new Error(`chorus ${args.join(' ')} exited with code ${code}`));
+      }
     });
-    child.on('error', reject);
+    child.on('error', (err) => {
+      if (opts.tolerant) resolve();
+      else reject(err);
+    });
   });
 }
 

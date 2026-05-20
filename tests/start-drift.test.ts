@@ -51,4 +51,25 @@ describe('isDaemonOlderThanCli', () => {
     expect(isDaemonOlderThanCli('0.8', '0.8.1')).toBe(true);
     expect(isDaemonOlderThanCli('0.8', '0.8.0')).toBe(false);
   });
+
+  it('treats empty-string daemon version as older', () => {
+    // Defensive: malformed daemon.json (version: "") shouldn't make
+    // chorus think the daemon is current. Force the restart.
+    expect(isDaemonOlderThanCli('', '0.8.43')).toBe(true);
+  });
+
+  it('documents prerelease comparison behaviour (known limitation)', () => {
+    // The underlying versionGreater does split-on-dot + parseInt, so
+    // any non-numeric tail compares as zero. We DON'T promise correct
+    // semver prerelease ordering — flagged for follow-up if we ever
+    // ship RC tags to npm latest. This test pins the *observed*
+    // behaviour so a future semver-aware rewrite doesn't silently
+    // change drift semantics.
+    //
+    // "0.8.43-rc.1" → parses to [0, 8, 43, 1] (the "rc" tail in "43-rc"
+    // returns NaN || 0 = 0, then the trailing ".1" is 1). So daemon
+    // "0.8.43-rc.1" is seen as NEWER than CLI "0.8.43" → no restart.
+    // Stable RC tags would need a real semver parser; out of scope here.
+    expect(isDaemonOlderThanCli('0.8.43-rc.1', '0.8.43')).toBe(false);
+  });
 });
