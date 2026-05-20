@@ -484,14 +484,6 @@ async function runReviewer(
             });
             return null;
           }
-          // Cross-lineage swap: when the entry's lineage differs from the
-          // slot's primary, re-resolve the shim. The slot's identity
-          // (agentName, reviewerDir, participant key) stays bound to the
-          // primary lineage so the cockpit card doesn't re-key mid-run —
-          // the cli_warning below tells the UI a swap happened.
-          const entryShim = entry.lineage === candidate.lineage
-            ? shim
-            : pickShimForVoice(entry.lineage as Lineage, entry.model);
           // Hold the claim through the round REGARDLESS of attempt
           // outcome — diversity-preserving semantics for shared
           // template fallbacks.
@@ -527,6 +519,17 @@ async function runReviewer(
           // infrastructure error.
           let threw = false;
           try {
+            // Cross-lineage swap: when the entry's lineage differs from
+            // the slot's primary, re-resolve the shim. The slot's
+            // identity (agentName, reviewerDir, participant key) stays
+            // bound to the primary lineage so the cockpit card doesn't
+            // re-key mid-run — the cli_warning below tells the UI a
+            // swap happened. Resolved INSIDE the try block so a
+            // pickShimForVoice throw still releases the claim we just
+            // took (caught by chorus audit on PR #77).
+            const entryShim = entry.lineage === candidate.lineage
+              ? shim
+              : pickShimForVoice(entry.lineage as Lineage, entry.model);
             return await runReviewerHeadless({
               shim: entryShim,
               chatId,
