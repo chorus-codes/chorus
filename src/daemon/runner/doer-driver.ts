@@ -9,7 +9,7 @@ import { getTransport } from '../../lib/settings/transport.js';
 import { CLI_LINEAGES, type CliLineageKey } from '../../lib/settings/concurrency.js';
 import { acquire as acquireCliSlot } from '../cli-semaphore.js';
 import { isHttpDispatchedShim, pickShimForVoice } from '../agents/index.js';
-import type { ErrorDetector } from '../error-detector.js';
+import { isRetryableErrorKind, type ErrorDetector } from '../error-detector.js';
 import { waitForAnswer } from '../output-watcher.js';
 import * as participantAborts from '../participant-aborts.js';
 import type { TmuxManager } from '../tmux-types.js';
@@ -204,19 +204,52 @@ export async function runDoer(
           const entryShim = entry.lineage === phase.doer.lineage
             ? shim
             : pickShimForVoice(entry.lineage as Lineage, entry.model);
-          return runDoerHeadless({
-            shim: entryShim,
-            chatId,
-            phase,
-            round,
-            agentName,
-            askContent: ask,
-            answerFile,
-            doerCwd,
-            abortSignal: handle.signal,
-            onEvent,
-            modelOverride: entry.model,
-          });
+          // Single-retry on transient kinds before advancing the chain.
+          // See reviewer-driver for full rationale and the kind taxonomy.
+          const MAX_ATTEMPTS = 2;
+          const RETRY_BACKOFF_MS = 1000;
+          for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+            const lastError: { kind?: string; message?: string } = {};
+            const result = await runDoerHeadless({
+              shim: entryShim,
+              chatId,
+              phase,
+              round,
+              agentName,
+              askContent: ask,
+              answerFile,
+              doerCwd,
+              abortSignal: handle.signal,
+              onEvent,
+              modelOverride: entry.model,
+              lastError,
+            });
+            if (result !== null) return result;
+            if (attempt === MAX_ATTEMPTS) return null;
+            if (!isRetryableErrorKind(lastError.kind)) return null;
+            if (handle.signal.aborted) return null;
+            console.warn(
+              `[doer] retrying transient failure chat=${chatId} round=${round} ` +
+                `agent=${agentName} ` +
+                `target=${entry.lineage}/${entry.model ?? '(default)'} ` +
+                `kind=${lastError.kind} attempt=${attempt + 1}/${MAX_ATTEMPTS}`,
+            );
+            onEvent({
+              chatId,
+              type: 'cli_warning',
+              payload: {
+                phaseId: phase.id,
+                round,
+                role: 'doer',
+                agent: agentName,
+                reason: 'transient_retry',
+                message: `Transient ${lastError.kind ?? 'failure'} on ${entry.lineage}/${entry.model ?? '(default)'} — retrying once before advancing fallback.`,
+              },
+              ts: Date.now(),
+            });
+            await new Promise((r) => setTimeout(r, RETRY_BACKOFF_MS));
+          }
+          return null;
         },
         (from, to, fromIdx) => {
           const sameLineage = from.lineage === to.lineage;

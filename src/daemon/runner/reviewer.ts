@@ -40,6 +40,15 @@ export async function runReviewerHeadless(args: {
   reviewerDir: string;
   abortSignal: AbortSignal;
   onEvent: (e: RunnerEvent) => void;
+  /**
+   * Optional mutable out-param the caller (reviewer-driver) inspects
+   * to decide whether to retry the same target before advancing the
+   * fallback chain. Mutated when errorSummary is set; otherwise left
+   * untouched (which the caller treats as "no kind = not retryable").
+   * Out-of-band so the existing boolean | null return type stays
+   * stable for every other caller.
+   */
+  lastError?: { kind?: string; message?: string };
 }): Promise<boolean | null> {
   const {
     shim,
@@ -55,6 +64,7 @@ export async function runReviewerHeadless(args: {
     reviewerDir,
     abortSignal,
     onEvent,
+    lastError,
   } = args;
 
   if (!shim.runHeadless) return null;
@@ -427,6 +437,14 @@ export async function runReviewerHeadless(args: {
     if (errored) {
       const errorKind = errorSummary?.kind ?? 'unknown';
       const errorMessage = errorSummary?.message ?? '(no message captured)';
+      // Mirror the classified error onto the caller's out-param so
+      // reviewer-driver can decide retry-vs-advance without re-reading
+      // _attempts.jsonl. Only mutated on errored runs; happy-path
+      // returns leave lastError untouched.
+      if (lastError) {
+        lastError.kind = errorKind;
+        lastError.message = errorMessage;
+      }
       const durationMs = Date.now() - startedAt;
       try {
         const attemptsFile = path.join(reviewerDir, '_attempts.jsonl');

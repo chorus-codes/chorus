@@ -9,7 +9,7 @@ import { getTransport } from '../../lib/settings/transport.js';
 import { CLI_LINEAGES, type CliLineageKey } from '../../lib/settings/concurrency.js';
 import { acquire as acquireCliSlot } from '../cli-semaphore.js';
 import { isHttpDispatchedShim, pickShimForVoice } from '../agents/index.js';
-import type { ErrorDetector } from '../error-detector.js';
+import { isRetryableErrorKind, type ErrorDetector } from '../error-detector.js';
 import { waitForAnswer } from '../output-watcher.js';
 import * as participantAborts from '../participant-aborts.js';
 import type { TmuxManager } from '../tmux-types.js';
@@ -530,21 +530,62 @@ async function runReviewer(
             const entryShim = entry.lineage === candidate.lineage
               ? shim
               : pickShimForVoice(entry.lineage as Lineage, entry.model);
-            return await runReviewerHeadless({
-              shim: entryShim,
-              chatId,
-              phase,
-              round,
-              reviewerIdx,
-              candidateLineage: entry.lineage,
-              candidateModel: entry.model,
-              agentName,
-              askContent: ask,
-              answerFile,
-              reviewerDir,
-              abortSignal: handle.signal,
-              onEvent,
-            });
+            // Single-retry on transient kinds before advancing the
+            // chain. Most CLI calls succeed; the failures that DO
+            // recur are deterministic (auth, quota, db-corrupt) and
+            // are NOT retried. Stream-failures, cold-start timeouts,
+            // tmux-dead, and HTTP 5xx ARE retried — a single ~1s
+            // backoff catches the cheap save (mid-stream network blip,
+            // slow cold start hitting warm cache on the second try)
+            // without doubling spend on a real outage (which fails
+            // twice and then advances). See isRetryableErrorKind for
+            // the full taxonomy.
+            const MAX_ATTEMPTS = 2;
+            const RETRY_BACKOFF_MS = 1000;
+            for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+              const lastError: { kind?: string; message?: string } = {};
+              const result = await runReviewerHeadless({
+                shim: entryShim,
+                chatId,
+                phase,
+                round,
+                reviewerIdx,
+                candidateLineage: entry.lineage,
+                candidateModel: entry.model,
+                agentName,
+                askContent: ask,
+                answerFile,
+                reviewerDir,
+                abortSignal: handle.signal,
+                onEvent,
+                lastError,
+              });
+              if (result !== null) return result;
+              if (attempt === MAX_ATTEMPTS) return null;
+              if (!isRetryableErrorKind(lastError.kind)) return null;
+              if (handle.signal.aborted) return null;
+              console.warn(
+                `[reviewer] retrying transient failure chat=${chatId} round=${round} ` +
+                  `slot=${agentName}-${reviewerIdx} ` +
+                  `target=${entry.lineage}/${entry.model ?? '(default)'} ` +
+                  `kind=${lastError.kind} attempt=${attempt + 1}/${MAX_ATTEMPTS}`,
+              );
+              onEvent({
+                chatId,
+                type: 'cli_warning',
+                payload: {
+                  phaseId: phase.id,
+                  round,
+                  role: 'reviewer',
+                  agent: `${agentName}-${reviewerIdx}`,
+                  reason: 'transient_retry',
+                  message: `Transient ${lastError.kind ?? 'failure'} on ${entry.lineage}/${entry.model ?? '(default)'} — retrying once before advancing fallback.`,
+                },
+                ts: Date.now(),
+              });
+              await new Promise((r) => setTimeout(r, RETRY_BACKOFF_MS));
+            }
+            return null;
           } catch (err) {
             threw = true;
             throw err;

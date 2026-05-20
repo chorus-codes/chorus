@@ -49,6 +49,11 @@ export async function runDoerHeadless(args: {
    *  over `phase.doer.models?.[0]` so the outer runDoer can iterate the
    *  models[] list without rewriting the phase fixture between attempts. */
   modelOverride?: string;
+  /** Optional mutable out-param the caller (doer-driver) inspects to
+   *  decide whether to retry the same target before advancing the
+   *  fallback chain. Mutated when the run errors; otherwise untouched.
+   *  See runReviewerHeadless's matching field for rationale. */
+  lastError?: { kind?: string; message?: string };
 }): Promise<{
   content: string;
   full: boolean;
@@ -77,6 +82,7 @@ export async function runDoerHeadless(args: {
     abortSignal,
     onEvent,
     modelOverride,
+    lastError,
   } = args;
 
   if (!shim.runHeadless) {
@@ -379,6 +385,13 @@ export async function runDoerHeadless(args: {
     // Append (not overwrite) when partial content survived so post-mortem
     // sees both. Mirrors the matching block in runReviewerHeadless — keep
     // them in sync.
+    // Mirror the classified error onto the caller's out-param so the
+    // doer-driver can decide retry-vs-advance without re-parsing
+    // answer.md. Only mutated on errored runs.
+    if (errored && errorSummary && lastError) {
+      lastError.kind = errorSummary.kind;
+      lastError.message = errorSummary.message;
+    }
     if (errored && !finalText && errorSummary) {
       try {
         let resetAt: number | undefined;

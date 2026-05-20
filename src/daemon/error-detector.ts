@@ -26,6 +26,52 @@ export interface CliError {
 }
 
 /**
+ * Decide whether a CLI failure is worth one immediate retry before
+ * advancing the fallback chain. Most CLI calls succeed; the failure
+ * cases that DO recur are deterministic — auth/quota/db-corrupt. The
+ * cases that DON'T recur are transient — network blip mid-stream,
+ * slow cold start, opencode DB lock that clears on the next attempt.
+ * One retry catches the cheap save without doubling spend on real
+ * outages (which fail twice and then advance as before).
+ *
+ * Terminal (no retry — same call will fail the same way):
+ *   - quota_exhausted        quota window is server-scheduled
+ *   - token_refresh_lost     human must re-authenticate
+ *   - mcp_handshake_failed   auth issue, same remediation
+ *   - opencode_db_corrupt    local DB corruption persists
+ *   - permission_prompt      needs user interaction or recoverKeys
+ *
+ * Transient (retry once):
+ *   - cold_start_timeout     CLI was slow; second cold start may hit warm cache
+ *   - tmux_dead              session crashed; respawn may succeed
+ *   - stream_failure         catch-all from reviewer.ts when the stream
+ *                            ends with no kind match — usually a brief
+ *                            upstream blip
+ *   - unknown                same as stream_failure
+ *
+ * Also retryable: HTTP-dispatched shim 5xx codes from OpenRouter (the
+ * caller passes the `openrouter_<code>` kind verbatim — we accept any
+ * 5xx as transient). 4xx codes (401/402/403/429) are NOT retried;
+ * they're either auth/quota or already rate-limited. Retrying 429
+ * immediately would just compound the rate-limit.
+ */
+export function isRetryableErrorKind(kind: string | undefined): boolean {
+  if (!kind) return false;
+  switch (kind) {
+    case 'cold_start_timeout':
+    case 'tmux_dead':
+    case 'stream_failure':
+    case 'unknown':
+      return true;
+  }
+  if (kind.startsWith('openrouter_')) {
+    const code = Number(kind.slice('openrouter_'.length));
+    return Number.isFinite(code) && code >= 500 && code < 600;
+  }
+  return false;
+}
+
+/**
  * Parse human-readable reset time like "Apr 30th, 2026 10:05 PM" to ms-epoch.
  * Returns undefined on parse failure (UI hides the timer in that case).
  */

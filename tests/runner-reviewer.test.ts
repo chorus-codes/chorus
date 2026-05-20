@@ -170,6 +170,62 @@ describe('runReviewerHeadless', () => {
     expect(verdict).toBeNull();
   });
 
+  it('surfaces classified errorKind via lastError out-param', async () => {
+    // The driver depends on this contract to decide retry-vs-advance.
+    // A stream that errors with kind=stream_failure must populate
+    // lastError.kind so the driver sees "transient — retry once".
+    const handle = makeFakeShim({
+      events: [{ type: 'error', kind: 'stream_failure', message: 'EPIPE' }],
+    });
+    const lastError: { kind?: string; message?: string } = {};
+    const verdict = await runReviewerHeadless({
+      shim: handle.shim,
+      chatId: 'test-chat',
+      phase: fixturePhase,
+      round: 1,
+      reviewerIdx: 0,
+      candidateLineage: 'openai',
+      candidateModel: 'gpt-5.5',
+      agentName: 'codex-cli',
+      askContent: 'review the doer output',
+      answerFile,
+      reviewerDir,
+      abortSignal: new AbortController().signal,
+      onEvent: (e) => events.push(e),
+      lastError,
+    });
+    expect(verdict).toBeNull();
+    expect(lastError.kind).toBe('stream_failure');
+    expect(lastError.message).toContain('EPIPE');
+  });
+
+  it('leaves lastError untouched on successful run', async () => {
+    // Happy-path: classifier shouldn't see a phantom error from a
+    // successful reviewer attempt.
+    const handle = makeFakeShim({
+      events: happyPathEvents(`${PADDING}\nlgtm\n## DONE`),
+    });
+    const lastError: { kind?: string; message?: string } = {};
+    const verdict = await runReviewerHeadless({
+      shim: handle.shim,
+      chatId: 'test-chat',
+      phase: fixturePhase,
+      round: 1,
+      reviewerIdx: 0,
+      candidateLineage: 'openai',
+      candidateModel: 'gpt-5.5',
+      agentName: 'codex-cli',
+      askContent: 'review the doer output',
+      answerFile,
+      reviewerDir,
+      abortSignal: new AbortController().signal,
+      onEvent: (e) => events.push(e),
+      lastError,
+    });
+    expect(verdict).toBe(true);
+    expect(lastError.kind).toBeUndefined();
+  });
+
   it('preserves streamed deltas to disk when finalText is empty', async () => {
     const text = `${PADDING}\nlgtm — ship it`;
     const handle = makeFakeShim({
