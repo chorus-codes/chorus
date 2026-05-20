@@ -509,6 +509,13 @@ export function spawnHeadless(opts: SpawnHeadlessOptions): HeadlessRun {
 
   // ─── timeout + abort kill plumbing ─────────────────────────────────────
   let killReason: string | undefined;
+  // Hold a reference to the SIGKILL grace timer so finalize() can clear
+  // it. PR #74 audit (gemini-cli-1 MEDIUM): when the child dies on
+  // SIGTERM before the 5s grace expires, the timer's no-op closure stays
+  // pinned in memory until KILL_GRACE_MS — adds 5s of dangling closures
+  // per CLI invocation. unref() means it doesn't block process exit but
+  // it DOES still hold the closure (and the file-scope `child` ref).
+  let killGraceTimer: NodeJS.Timeout | null = null;
 
   const sigtermThenKill = (reason: string): void => {
     if (killReason) return; // already killing
@@ -518,14 +525,15 @@ export function spawnHeadless(opts: SpawnHeadlessOptions): HeadlessRun {
     } catch {
       /* ignore */
     }
-    const t = setTimeout(() => {
+    killGraceTimer = setTimeout(() => {
       try {
         child.kill('SIGKILL');
       } catch {
         /* ignore */
       }
+      killGraceTimer = null;
     }, KILL_GRACE_MS);
-    t.unref();
+    killGraceTimer.unref();
   };
 
   const timeoutHandle = setTimeout(() => {
@@ -564,6 +572,12 @@ export function spawnHeadless(opts: SpawnHeadlessOptions): HeadlessRun {
         finalized = true;
         clearTimeout(timeoutHandle);
         if (heartbeatHandle) clearInterval(heartbeatHandle);
+        if (killGraceTimer) {
+          // Child exited within the SIGTERM grace window — cancel the
+          // pending SIGKILL or its closure leaks for KILL_GRACE_MS.
+          clearTimeout(killGraceTimer);
+          killGraceTimer = null;
+        }
         if (opts.abortSignal) {
           opts.abortSignal.removeEventListener('abort', abortHandler);
         }
