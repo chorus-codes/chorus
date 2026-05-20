@@ -48,6 +48,12 @@ export type PrecheckResult =
   | { ok: true }
   | { ok: false; reason: PrecheckFailReason; message: string; cta: string; resetAt?: number };
 
+/** Shared between `opencode` and `moonshot` (kimi-via-opencode) entries. */
+const CRED_PATHS_OPENCODE = (): string[] => [
+  path.join(os.homedir(), '.opencode', 'auth.json'),
+  path.join(os.homedir(), '.local', 'share', 'opencode', 'auth.json'),
+];
+
 /**
  * Per-lineage credential file we treat as "user is logged in." Each CLI
  * stores its OAuth bearer somewhere different; if the file doesn't exist
@@ -61,26 +67,35 @@ const CRED_PATHS: Record<CliLineage, () => string[]> = {
     path.join(os.homedir(), '.claude', '.credentials.json'),
     path.join(os.homedir(), '.config', 'anthropic', 'claude.json'),
   ],
-  openai: () => [
-    path.join(os.homedir(), '.codex', 'auth.json'),
-  ],
+  // Codex's auth lives in $CODEX_HOME/auth.json. When the user (or
+  // chorus) points the shim at a non-default home (e.g. cdx-2 via
+  // CHORUS_CODEX_HOME, or a per-account `~/.codex-<id>/`), the precheck
+  // MUST probe the same dir or it would either:
+  //   - falsely block a valid configured account (the default path is
+  //     empty / logged out but the override has credentials), or
+  //   - falsely pass an empty selected account (default has credentials
+  //     but the selected override doesn't).
+  // Honour the same precedence ensureCodexHome() uses in codex.ts.
+  openai: () => {
+    const homes: string[] = [];
+    const override = process.env.CHORUS_CODEX_HOME?.trim();
+    if (override) homes.push(override);
+    homes.push(path.join(os.homedir(), '.codex'));
+    return homes.map((h) => path.join(h, 'auth.json'));
+  },
   google: () => [
     path.join(os.homedir(), '.gemini', 'oauth_creds.json'),
     path.join(os.homedir(), '.config', 'gemini', 'oauth_creds.json'),
   ],
-  opencode: () => [
-    path.join(os.homedir(), '.opencode', 'auth.json'),
-    path.join(os.homedir(), '.local', 'share', 'opencode', 'auth.json'),
-  ],
+  opencode: () => CRED_PATHS_OPENCODE(),
   moonshot: () => [
     path.join(os.homedir(), '.kimi', 'auth.json'),
-    // OpenCode stores its auth in two places depending on install path. The
-    // kimi shim delegates to `opencode --model opencode-go/kimi-k2.6` when
-    // the requested model carries the opencode-go/ prefix, so a moonshot
-    // voice routed via opencode is actually authed by opencode's creds —
-    // not the kimi-cli ones. Both opencode candidates accepted here.
-    path.join(os.homedir(), '.opencode', 'auth.json'),
-    path.join(os.homedir(), '.local', 'share', 'opencode', 'auth.json'),
+    // The kimi shim delegates to `opencode --model opencode-go/kimi-k2.6`
+    // when the requested model carries the opencode-go/ prefix, so a
+    // moonshot voice routed via opencode is actually authed by opencode's
+    // creds. Reuse the opencode paths here so a future move (e.g. adding
+    // a third candidate location) lands in one place, not two.
+    ...CRED_PATHS_OPENCODE(),
   ],
   // OpenRouter has no on-disk credential file — its API key lives in
   // the secrets table. The shim itself returns auth_missing when the

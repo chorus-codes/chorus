@@ -106,8 +106,15 @@ function makeFakeChild(): {
     stderr,
     kill: (_sig?: string): boolean => true,
   });
+  // spawnHeadless now finalizes on `close` (post stdio-drain) rather than
+  // `exit`. The trigger fires both events back-to-back for tests that
+  // don't care about the drain timing — the runtime guard makes
+  // finalize() idempotent so emitting both is safe.
   const triggerExit = (code: number | null): void => {
-    setImmediate(() => emitter.emit('exit', code));
+    setImmediate(() => {
+      emitter.emit('exit', code);
+      emitter.emit('close', code, null);
+    });
   };
   return { child, triggerExit };
 }

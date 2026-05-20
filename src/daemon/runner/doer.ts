@@ -278,7 +278,26 @@ export async function runDoerHeadless(args: {
             });
           }
         }
-        if (!errorSummary) {
+        // Vague→specific upgrade rule. Gemini's stream-parser emits a
+        // generic `gemini_result_error` from the JSON result line; the
+        // on-exit handler then emits a precise `quota_exhausted` from
+        // stderr with the reset window. Without this upgrade the doer
+        // card shows the vague first message and the user has no idea
+        // when their quota resets. Mirrors reviewer.ts — keep these
+        // sets in sync.
+        const VAGUE_KINDS = new Set(['gemini_result_error']);
+        const SPECIFIC_KINDS = new Set([
+          'quota_exhausted',
+          'rate_limit',
+          'auth_error',
+          'sandbox_unsupported',
+          'cli_not_in_path',
+        ]);
+        const isUpgrade =
+          errorSummary &&
+          VAGUE_KINDS.has(errorSummary.kind) &&
+          SPECIFIC_KINDS.has(event.kind);
+        if (!errorSummary || isUpgrade) {
           errorSummary = {
             kind: event.kind,
             message: classified?.message ?? event.message,
@@ -331,13 +350,13 @@ export async function runDoerHeadless(args: {
     });
   } finally {
     writer.flushNow();
-    // When the subprocess died without producing any content, write the
-    // error summary to answer.md so the chat dir is self-explanatory.
-    // Same pattern as runReviewerHeadless — see comment there.
-    if (errored && accumulated.length === 0 && (!finalText || finalText.length === 0) && errorSummary) {
+    // When the subprocess errored without a complete message_done, write
+    // the error summary to answer.md so the chat dir is self-explanatory.
+    // Append (not overwrite) when partial content survived so post-mortem
+    // sees both. Mirrors the matching block in runReviewerHeadless — keep
+    // them in sync.
+    if (errored && !finalText && errorSummary) {
       try {
-        // Mirror reviewer.ts: include cli-health resetAt for quota /
-        // rate-limit failures so the cockpit can render a countdown.
         let resetAt: number | undefined;
         try {
           const h = await getHealth(phase.doer.lineage as CliLineage);
@@ -347,15 +366,25 @@ export async function runDoerHeadless(args: {
         } catch {
           /* health lookup is informational */
         }
-        fs.writeFileSync(
-          answerFile,
+        const summaryBlock =
           `## DOER FAILED\n\n` +
-            `**Kind:** ${errorSummary.kind}\n` +
-            `**Lineage:** ${phase.doer.lineage}\n` +
-            `**Model:** ${modelOverride ?? phase.doer.models?.[0] ?? '(default)'}\n` +
-            (resetAt ? `**Resets:** ${new Date(resetAt).toISOString()}\n` : '') +
-            `\n${errorSummary.message}\n`,
-        );
+          `**Kind:** ${errorSummary.kind}\n` +
+          `**Lineage:** ${phase.doer.lineage}\n` +
+          `**Model:** ${modelOverride ?? phase.doer.models?.[0] ?? '(default)'}\n` +
+          (resetAt ? `**Resets:** ${new Date(resetAt).toISOString()}\n` : '') +
+          `\n${errorSummary.message}\n`;
+        const existing = accumulated.length > 0 && fs.existsSync(answerFile)
+          ? fs.readFileSync(answerFile, 'utf-8')
+          : '';
+        if (existing.length === 0) {
+          fs.writeFileSync(answerFile, summaryBlock);
+        } else {
+          const sep = existing.endsWith('\n') ? '\n' : '\n\n';
+          fs.writeFileSync(
+            answerFile,
+            `${existing}${sep}---\n\n[Partial output above — CLI failed before completion]\n\n${summaryBlock}`,
+          );
+        }
       } catch {
         /* best-effort — don't fail the runner because of a write error */
       }

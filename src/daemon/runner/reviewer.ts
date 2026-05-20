@@ -365,12 +365,14 @@ export async function runReviewerHeadless(args: {
           `or a silent abort. Check the CLI's own log for details.`,
       };
     }
-    // When the subprocess died without producing any content, write the
-    // error summary to answer.md so the chat dir is self-explanatory.
-    // Otherwise post-mortem inspection sees an empty file with no
-    // signal — exactly the silent-failure that hid opencode-cli-2's
-    // failure on the PR #10 review chat.
-    if (errored && accumulated.length === 0 && (!finalText || finalText.length === 0) && errorSummary) {
+    // When the subprocess errored without a complete message_done, write
+    // the error summary to answer.md so the chat dir is self-explanatory.
+    // We previously skipped this whenever any partial content was
+    // accumulated — but that left files with mid-paragraph truncations and
+    // no signal that the CLI crashed. Now: append the failure block to
+    // whatever partial content survived, so post-mortem inspection sees
+    // both what was produced AND why the run died.
+    if (errored && !finalText && errorSummary) {
       try {
         // For quota / rate-limit failures, the error-detector (tmux path)
         // or recordHealth call (HTTP shim path) has already stamped the
@@ -387,15 +389,28 @@ export async function runReviewerHeadless(args: {
         } catch {
           /* health lookup is informational */
         }
-        fs.writeFileSync(
-          answerFile,
+        const summaryBlock =
           `## REVIEWER FAILED\n\n` +
-            `**Kind:** ${errorSummary.kind}\n` +
-            `**Lineage:** ${candidateLineage}\n` +
-            `**Model:** ${candidateModel ?? '(default)'}\n` +
-            (resetAt ? `**Resets:** ${new Date(resetAt).toISOString()}\n` : '') +
-            `\n${errorSummary.message}\n`,
-        );
+          `**Kind:** ${errorSummary.kind}\n` +
+          `**Lineage:** ${candidateLineage}\n` +
+          `**Model:** ${candidateModel ?? '(default)'}\n` +
+          (resetAt ? `**Resets:** ${new Date(resetAt).toISOString()}\n` : '') +
+          `\n${errorSummary.message}\n`;
+        const existing = accumulated.length > 0 && fs.existsSync(answerFile)
+          ? fs.readFileSync(answerFile, 'utf-8')
+          : '';
+        if (existing.length === 0) {
+          fs.writeFileSync(answerFile, summaryBlock);
+        } else {
+          // Separator makes the dual structure obvious to verdict parsers
+          // and human readers — the partial answer above, the failure
+          // record below.
+          const sep = existing.endsWith('\n') ? '\n' : '\n\n';
+          fs.writeFileSync(
+            answerFile,
+            `${existing}${sep}---\n\n[Partial output above — CLI failed before completion]\n\n${summaryBlock}`,
+          );
+        }
       } catch {
         /* best-effort — don't fail the runner because of a write error */
       }

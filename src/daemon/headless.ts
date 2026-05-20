@@ -110,6 +110,18 @@ function spawnEnv(extra?: Record<string, string>): NodeJS.ProcessEnv {
 const DEFAULT_TIMEOUT_MS = 10 * 60 * 1000; // 10 minutes
 const KILL_GRACE_MS = 5_000;               // SIGKILL after SIGTERM + 5s
 const HEARTBEAT_INTERVAL_MS = 5_000;       // progress event for non-streaming CLIs
+/**
+ * Cap on the line-parser scratch buffer (`stdoutBuf`).
+ *
+ * `fullStdout` already has a 10 MB cap so a pathological no-newline stream
+ * can't OOM the daemon — but the parser-side scratch buffer was uncapped,
+ * which meant the same pathological stream would still grow `stdoutBuf`
+ * forever. Caps the parser-side buffer at 1 MB; if we hit it we force a
+ * line-mode flush (treat the whole blob as one line through `parseLine`)
+ * then drop it on the floor. Real CLI output never crosses this — code/
+ * gemini/opencode all emit `\n`-terminated lines within a few KB.
+ */
+const MAX_STDOUT_BUF_BYTES = 1 * 1024 * 1024;
 
 /**
  * Where we persist child PIDs across daemon restarts so the reaper can find
@@ -396,6 +408,7 @@ export function spawnHeadless(opts: SpawnHeadlessOptions): HeadlessRun {
   let fullStderr = '';
   let stderrTruncated = false;
 
+  let stdoutBufFlushed = false;
   child.stdout.setEncoding('utf-8');
   child.stdout.on('data', (chunk: string) => {
     if (!stdoutTruncated) {
@@ -417,6 +430,28 @@ export function spawnHeadless(opts: SpawnHeadlessOptions): HeadlessRun {
           type: 'error',
           kind: 'parse_error',
           message: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
+    // Defend against an unbounded scratch buffer when a CLI streams MB+
+    // of output without ever emitting a newline. Force-flush via
+    // parseLine once (gives the parser a chance to recover something),
+    // then reset so the next chunks aren't appended on top of the
+    // already-flushed prefix. One structured warning per spawn — we
+    // don't want a spammy stream pumping this on every chunk.
+    if (Buffer.byteLength(stdoutBuf, 'utf-8') > MAX_STDOUT_BUF_BYTES) {
+      try {
+        for (const evt of opts.parseLine(stdoutBuf)) enqueue(evt);
+      } catch {
+        /* parse error on overflow path isn't fatal */
+      }
+      stdoutBuf = '';
+      if (!stdoutBufFlushed) {
+        stdoutBufFlushed = true;
+        enqueue({
+          type: 'error',
+          kind: 'output_truncated',
+          message: `${opts.cli} stdout line buffer exceeded ${MAX_STDOUT_BUF_BYTES / (1024 * 1024)} MB without a newline; dropping un-parsed scratch.`,
         });
       }
     }
@@ -498,16 +533,34 @@ export function spawnHeadless(opts: SpawnHeadlessOptions): HeadlessRun {
     }
   }
 
-  // ─── exit ─────────────────────────────────────────────────────────────
+  // ─── exit/close/error ──────────────────────────────────────────────────
+  //
+  // We hang the finalization off `close` rather than `exit` because Node
+  // does NOT guarantee stdout/stderr have fully drained when `exit` fires.
+  // For one-shot CLIs like codex / opencode that feed `fullStdout` into
+  // their `onExit` parser, an exit-time parse can see a truncated buffer
+  // and emit an empty `message_done` — which downstream renders as a
+  // silent zero-byte answer.md. `close` fires only after stdio is drained.
+  //
+  // The spawn `error` handler can fire WITHOUT a subsequent `close` (e.g.
+  // synchronous ENOENT — child never came up), so it must also finalize.
+  // A `finalized` guard makes finalize() idempotent regardless of which
+  // path gets there first.
   const done = new Promise<{ code: number | null; killed: boolean; reason?: string }>(
     (resolve) => {
-      child.on('exit', (code) => {
+      let finalized = false;
+
+      const finalize = (code: number | null, signal: NodeJS.Signals | null): void => {
+        if (finalized) return;
+        finalized = true;
         clearTimeout(timeoutHandle);
         if (heartbeatHandle) clearInterval(heartbeatHandle);
         if (opts.abortSignal) {
           opts.abortSignal.removeEventListener('abort', abortHandler);
         }
-        unregisterPid(child.pid ?? -1);
+        if (child.pid !== undefined) {
+          unregisterPid(child.pid);
+        }
 
         // Drain any trailing partial line through parser one more time.
         if (stdoutBuf.length > 0) {
@@ -550,7 +603,14 @@ export function spawnHeadless(opts: SpawnHeadlessOptions): HeadlessRun {
         // the same reason.
         if (killReason === 'early_abort') {
           // already emitted; nothing further to surface
-        } else if (killReason && code !== 0) {
+        } else if (killReason) {
+          // Was killed by timeout / abort. Emit the structured error
+          // event REGARDLESS of exit code — some CLIs catch SIGTERM and
+          // exit 0 on a "graceful" shutdown, which used to silently
+          // swallow the kill signal and convince the caller everything
+          // was fine. The downstream `errored` flag is now the source
+          // of truth; if the CLI also produced a real `message_done`
+          // before dying, the answer text is still preserved.
           enqueue({
             type: 'error',
             kind: killReason,
@@ -588,39 +648,40 @@ export function spawnHeadless(opts: SpawnHeadlessOptions): HeadlessRun {
                 `Run 'chorus doctor' for a diagnosis, or set the path manually ` +
                 `via Settings → Connect a CLI → "I know where it is".`,
             });
-            closeQueue();
-            resolve({ code, killed: Boolean(killReason), reason: killReason });
-            return;
+          } else {
+            const tails = [stdoutTail, stderrTail].filter((s) => s.length > 0).join(' | ');
+            const truncationNote =
+              stdoutTruncated || stderrTruncated
+                ? `[output truncated at ${MAX_FULL_BUFFER_BYTES / (1024 * 1024)}MB cap]`
+                : '';
+            const detail = [tails, truncationNote].filter((s) => s.length > 0).join(' ');
+            enqueue({
+              type: 'error',
+              kind: 'cli_failed',
+              message: detail.length > 0
+                ? `${opts.cli} exited ${code}: ${detail}`
+                : `${opts.cli} exited ${code} with no output`,
+            });
           }
-
-          const tails = [stdoutTail, stderrTail].filter((s) => s.length > 0).join(' | ');
-          // If we hit the 10 MB accumulator cap, the *leading* output is
-          // captured but the trailing part is dropped on the floor (we stop
-          // appending early to avoid OOM). Surface a short note so the user
-          // knows the diagnostic is partial; the full output, if needed, is
-          // recoverable via the per-round artifact files in the chat dir.
-          const truncationNote =
-            stdoutTruncated || stderrTruncated
-              ? `[output truncated at ${MAX_FULL_BUFFER_BYTES / (1024 * 1024)}MB cap]`
-              : '';
-          const detail = [tails, truncationNote].filter((s) => s.length > 0).join(' ');
-          enqueue({
-            type: 'error',
-            kind: 'cli_failed',
-            message: detail.length > 0
-              ? `${opts.cli} exited ${code}: ${detail}`
-              : `${opts.cli} exited ${code} with no output`,
-          });
         }
 
         closeQueue();
         resolve({ code, killed: Boolean(killReason), reason: killReason });
-      });
+        void signal; // signal is captured for potential future use
+      };
+
+      child.on('close', (code, signal) => finalize(code, signal));
 
       child.on('error', (err) => {
         // ENOENT is the direct-spawn equivalent of bash's exit-127 — the
         // binary literally isn't on the daemon's PATH. Surface the same
         // doctor pointer as the bash-wrapped path-error branch above.
+        //
+        // Critical: also finalize here. If spawn fails synchronously
+        // (binary not on PATH), `close` may never fire — the queue
+        // would stay open forever and async iterators waiting on
+        // events would hang. The `finalized` guard makes this safe to
+        // call even when `close` ALSO fires.
         const enoent =
           (err as NodeJS.ErrnoException).code === 'ENOENT' ||
           /ENOENT/.test(err.message);
@@ -632,7 +693,7 @@ export function spawnHeadless(opts: SpawnHeadlessOptions): HeadlessRun {
               `Run 'chorus doctor' or set the path manually via Settings.`
             : err.message,
         });
-        // 'exit' will follow with code=null
+        finalize(null, null);
       });
     },
   );

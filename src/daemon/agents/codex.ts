@@ -55,12 +55,24 @@ function ensureCodexHome(accountId: string | undefined): string {
   if (!fs.existsSync(codexDir)) {
     fs.mkdirSync(codexDir, { recursive: true });
 
-    const defaultConfigPath = path.join(primary, 'config.toml');
-    const targetConfigPath = path.join(codexDir, 'config.toml');
-
-    if (fs.existsSync(defaultConfigPath) && !fs.existsSync(targetConfigPath)) {
-      const content = fs.readFileSync(defaultConfigPath, 'utf-8');
-      fs.writeFileSync(targetConfigPath, content, 'utf-8');
+    // config.toml is non-critical — codex falls back to its built-in
+    // defaults when the file is absent. Wrap the copy so an EACCES /
+    // ENOENT race (file unlinked between exists and read, or chmod 0)
+    // doesn't crash ensureCodexHome with an unhandled exception. The
+    // directory was already created; the caller can still attempt to
+    // spawn codex with no overridden config.
+    try {
+      const defaultConfigPath = path.join(primary, 'config.toml');
+      const targetConfigPath = path.join(codexDir, 'config.toml');
+      if (fs.existsSync(defaultConfigPath) && !fs.existsSync(targetConfigPath)) {
+        const content = fs.readFileSync(defaultConfigPath, 'utf-8');
+        fs.writeFileSync(targetConfigPath, content, 'utf-8');
+      }
+    } catch (err) {
+      console.warn(
+        `[codex] config.toml copy to ${codexDir} failed (continuing with codex defaults):`,
+        err instanceof Error ? err.message : err,
+      );
     }
 
     // NOTE: NEVER copy auth.json — each CODEX_HOME must have its own.

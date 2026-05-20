@@ -49,6 +49,12 @@ beforeEach(async () => {
   fakeHome = path.join(os.tmpdir(), `chorus-fakehome-${randomUUID()}`);
   fs.mkdirSync(fakeHome, { recursive: true });
   process.env.HOME = fakeHome;
+  // Codex precheck now honours CHORUS_CODEX_HOME (mirrors ensureCodexHome
+  // in the shim). The dev shell may have this set to a real cdx-2 dir
+  // with creds; if we leave it set, the openai cred-gate tests pass
+  // through `auth.json exists` and the "blocks when missing" expectation
+  // breaks. Sandbox the env var for the duration of each test.
+  delete process.env.CHORUS_CODEX_HOME;
 
   vi.mocked(execFileSync).mockReset();
   vi.mocked(execFileSync).mockImplementation(() => { throw new Error('no keychain entry'); });
@@ -116,6 +122,30 @@ describe('precheckLineage', () => {
       writeFakeCred('.claude/.credentials.json');
       const result = await precheckLineage('anthropic');
       expect(result.ok).toBe(true);
+    });
+  });
+
+  describe('CHORUS_CODEX_HOME override (openai)', () => {
+    afterEach(() => { delete process.env.CHORUS_CODEX_HOME; });
+
+    it('reads auth.json from CHORUS_CODEX_HOME when set', async () => {
+      const altHome = path.join(fakeHome, '.codex-cdx-7');
+      fs.mkdirSync(altHome, { recursive: true });
+      fs.writeFileSync(path.join(altHome, 'auth.json'), '{"token":"x"}');
+      process.env.CHORUS_CODEX_HOME = altHome;
+      // Note: the default ~/.codex/ has NO creds, so without the override
+      // the precheck would block. With it, the override's creds count.
+      const result = await precheckLineage('openai');
+      expect(result.ok).toBe(true);
+    });
+
+    it('still blocks when CHORUS_CODEX_HOME points at a logged-out dir AND default is empty', async () => {
+      const altHome = path.join(fakeHome, '.codex-empty');
+      fs.mkdirSync(altHome, { recursive: true });
+      // no auth.json
+      process.env.CHORUS_CODEX_HOME = altHome;
+      const result = await precheckLineage('openai');
+      expect(result.ok).toBe(false);
     });
   });
 
