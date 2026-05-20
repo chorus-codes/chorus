@@ -25,14 +25,6 @@ import { quotePath } from './quote.js';
 import { spawnHeadless } from '../headless.js';
 import { parseAntigravity, parseAntigravityExit } from './parsers/index.js';
 
-/**
- * Canonical model id used in the voice catalog + UI. The actual model
- * is whatever agy 1.0.0 ships with (Gemini 3.5 Flash High per the
- * 2026-05-20 probe); the CLI doesn't expose a --model flag, so this is
- * the chorus-side label only.
- */
-export const ANTIGRAVITY_DEFAULT_MODEL = 'gemini-3.5-flash';
-
 export const antigravityShim: AgentShim = {
   lineage: 'antigravity',
   name: 'antigravity-cli',

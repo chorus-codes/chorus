@@ -22,14 +22,18 @@ import type { AgentEvent } from '../types.js';
  * concatenates them into the final answer. No JSON, no thought-trace,
  * no tool-use events to filter — the CLI hides those internally.
  *
- * Returns an empty array for blank lines so the accumulator doesn't
- * stutter on empty newlines.
+ * Empty lines emit a bare `\n` text_delta — paragraph breaks in the
+ * assistant's response are double-newlines in stdout, which spawnHeadless
+ * splits as `["para1", "", "para2"]`. Returning `[]` for the empty
+ * middle would collapse paragraph structure into a single block; convergent
+ * self-review (5/8 reviewers on PR #62) flagged this as data corruption
+ * for every multi-paragraph response.
  */
 export function parseAntigravity(line: string): AgentEvent[] {
-  if (line.length === 0) return [];
-  // Append a newline back — spawnHeadless splits on \n and strips it,
-  // but the assistant's answer may legitimately need paragraph breaks.
-  // Without this, the joined output collapses to one mega-paragraph.
+  // Restore the \n that spawnHeadless stripped — for empty input that
+  // produces a paragraph-break \n; for non-empty input it terminates
+  // the line. Either way the accumulator sees the same byte sequence
+  // the CLI originally emitted.
   return [{ type: 'text_delta', text: line + '\n' }];
 }
 
@@ -61,11 +65,33 @@ export function parseAntigravityExit(
   code: number | null,
 ): AgentEvent[] {
   if (code === 0) return [];
-  const clean = stderr.replace(/\x1b\[[0-9;]*m/g, '');
+  // Signal-kill path: Node reports code=null when the child was killed
+  // by signal. The fallback below would otherwise emit "exited with
+  // code null" which is meaningless to users. Treat as cli_error with
+  // an explicit signal message. Caught by self-review (PR #62, ocg-7).
+  if (code === null) {
+    return [
+      {
+        type: 'error',
+        kind: 'cli_error',
+        message: 'Antigravity CLI was killed by signal (likely timeout or chat cancel).',
+      },
+    ];
+  }
+  // Broader ANSI stripper — covers all CSI sequences (SGR, cursor
+  // movement, line clear), not just `\x1b[...m`. Self-review found the
+  // narrow `m`-only pattern would leave erasure / cursor codes embedded
+  // in stderr and break downstream pattern matches.
+  const clean = stderr.replace(/\x1b\[[0-9;?]*[A-Za-z]/g, '');
 
-  // Quota / rate limit signals (Google AI Pro period quota).
+  // Quota / rate limit signals (Google AI Pro period quota). Multiple
+  // phrasings: Google's docs use both `quota-exhausted` and `quota
+  // exceeded`; `\b429\b` is anchored to avoid matching `4290` /
+  // `port 14290` / etc.
   if (
-    /quota[\s-]?exhausted|rate[\s-]?limit|resource[\s-]?exhausted|429/i.test(clean)
+    /quota[\s-]?(?:exhausted|exceeded)|rate[\s-]?limit|resource[\s-]?exhausted|\b429\b/i.test(
+      clean,
+    )
   ) {
     return [
       {
@@ -80,9 +106,13 @@ export function parseAntigravityExit(
   // Auth-flow signals — if precheck somehow missed (token file gone
   // between precheck and dispatch), the agy CLI prints an OAuth-flow
   // line before hanging. Catch it on exit so the run-page card shows
-  // a useful "needs login" prompt.
+  // a useful "needs login" prompt. Tightened from the original
+  // `please.*login` (would match `please don't login to third-party
+  // services` per self-review).
   if (
-    /sign in|oauth|authenticate|antigravity-oauth-token|please.*login/i.test(clean)
+    /sign[\s-]?in|\boauth\b|authenticate|antigravity-oauth-token|please\s+(?:run\s+)?(?:agy\s+)?login\b/i.test(
+      clean,
+    )
   ) {
     return [
       {
@@ -94,8 +124,12 @@ export function parseAntigravityExit(
     ];
   }
 
-  // 401 / 403 — likely an expired/invalid token.
-  if (/401\s+Unauthorized|403\s+Forbidden|invalid[_-]token/i.test(clean)) {
+  // 401 / 403 — likely an expired/invalid token. Includes both the
+  // machine-readable `invalid_token` / `invalid-token` and the
+  // human-readable `invalid token` phrasings.
+  if (
+    /401\s+Unauthorized|403\s+Forbidden|invalid(?:[_-]|\s+)token/i.test(clean)
+  ) {
     return [
       {
         type: 'error',

@@ -229,7 +229,14 @@ export class ErrorDetector {
     // from the integration doc — CLI-specific patterns BEFORE the
     // generic auth-prompt regex so they route to the right `kind`).
     if (lineage === 'antigravity') {
-      if (/quota[\s-]?exhausted|resource[\s-]?exhausted|429/i.test(paneText)) {
+      // Match the same alternations as parseAntigravityExit so the pane-
+      // scraper and exit-handler agree on what counts as a quota error
+      // (self-review caught the drift between the two).
+      if (
+        /quota[\s-]?(?:exhausted|exceeded)|rate[\s-]?limit|resource[\s-]?exhausted|\b429\b/i.test(
+          paneText,
+        )
+      ) {
         return {
           kind: 'quota_exhausted',
           lineage,
