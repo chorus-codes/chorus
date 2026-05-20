@@ -18,6 +18,7 @@ const ORCHESTRATOR_TO_PROVIDER: Record<string, string> = {
   opencode: "opencode-cli",
   kimi: "kimi-cli",
   grok: "grok-cli",
+  antigravity: "antigravity-cli",
 };
 
 export const dynamic = "force-dynamic";

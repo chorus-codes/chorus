@@ -190,6 +190,8 @@ node bin/chorus.mjs init | grep -A1 "Grok"
 
 Open `/connect` in the browser — the Grok card should appear.
 
+> ⚠ **Skipping 2.1–2.4 is the most common integration miss.** A CLI can pass detection (Level 1) and even ship a working shim + voice seed (Level 3) while remaining invisible on the Home page Reviewer Fleet panel because `/orchestrators` doesn't know about it. The `chorus doctor` output shows the CLI as detected; `/voices` shows the voice seeded; but the Home card doesn't render. Always verify the curl above before declaring an integration done. (PR #62 antigravity hit this — see the v0.8.50 fix.)
+
 ---
 
 ## Level 3 — Full reviewer (shim)

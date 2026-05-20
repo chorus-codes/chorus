@@ -5,6 +5,7 @@
  * HTTP so the cockpit's /connect page can do it with one click.
  */
 
+import { antigravityOrchestrator } from './antigravity.js';
 import { claudeOrchestrator, registerClaudeMcpServer } from './claude.js';
 import { codexOrchestrator } from './codex.js';
 import {
@@ -40,6 +41,7 @@ const ORCHESTRATORS: OrchestratorDefinition[] = [
   opencodeOrchestrator,
   kimiOrchestrator,
   grokOrchestrator,
+  antigravityOrchestrator,
   cursorOrchestrator,
   windsurfOrchestrator,
 ];

@@ -27,6 +27,7 @@ export type OrchestratorName =
   | 'opencode'
   | 'kimi'
   | 'grok'
+  | 'antigravity'
   | 'cursor'
   | 'windsurf';
 
