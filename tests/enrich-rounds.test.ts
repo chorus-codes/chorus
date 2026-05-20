@@ -129,4 +129,56 @@ describe('enrichRounds', () => {
     expect(enriched[0].round).toBe(1);
     expect(enriched[1].round).toBe(2);
   });
+
+  it('suppresses doer-artifact phantom cards in review-only templates', () => {
+    // In review-only chats the runner creates a synthetic doer-artifact
+    // dir whose answer.md holds the user's input artifact (the audit
+    // prompt). Before the fix, the leftover loop appended that as a
+    // standalone DONE card on the run grid — confusing because the
+    // artifact IS the prompt being reviewed, not a participant.
+    const round: RoundSnapshot = {
+      round: 1,
+      participants: [
+        {
+          participant: 'doer-artifact',
+          role: 'doer',
+          agentName: 'artifact',
+          lineage: 'artifact' as never,
+          hasAnswer: true,
+          answer: '# Audit prompt body\n\n## DONE\n',
+        },
+      ],
+    };
+    const enriched = enrichRounds([round], eightReviewerTemplate, {});
+    // 8 reviewer placeholders, NOT 9 (no leftover doer-artifact card).
+    expect(enriched[0].participants).toHaveLength(8);
+    expect(
+      enriched[0].participants.find((p) => p.participant === 'doer-artifact'),
+    ).toBeUndefined();
+  });
+
+  it('still appends defensive unexpected reviewer leftovers (not filtered)', () => {
+    // Suppression is scoped to role='doer' on review-only chats. A
+    // reviewer participant that doesn't match any expected slot (e.g.
+    // an old chat dir with a since-removed lineage) still gets a card
+    // so the user can see "something ran here" instead of silent gap.
+    const round: RoundSnapshot = {
+      round: 1,
+      participants: [
+        {
+          participant: 'reviewer-someoldcli-99',
+          role: 'reviewer',
+          agentName: 'someoldcli',
+          lineage: 'someoldcli' as never,
+          hasAnswer: true,
+        },
+      ],
+    };
+    const enriched = enrichRounds([round], eightReviewerTemplate, {});
+    expect(
+      enriched[0].participants.find(
+        (p) => p.participant === 'reviewer-someoldcli-99',
+      ),
+    ).toBeDefined();
+  });
 });

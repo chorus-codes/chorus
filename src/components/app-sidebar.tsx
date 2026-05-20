@@ -215,7 +215,16 @@ export function SidebarBody({ onNavigate, collapsed = false, onToggleCollapsed }
         document.removeEventListener("visibilitychange", onVisibility);
       }
     };
-  }, [pathname]);
+    // Mount-once effect — DOES NOT depend on pathname. Active-route
+    // highlighting reads `pathname` during render via `isActive(href)`,
+    // not from this effect, so a navigation should re-render the nav
+    // items WITHOUT tearing down the SSE subscription or refetching
+    // the chat list. The old `[pathname]` dep paired with AppShell
+    // remounting per-page meant every route click closed SSE, cleared
+    // the poll, set chatsState back to "loading", and re-issued the
+    // GET — visible as the "Loading…" flash that prompted this fix.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const isActive = (href: string) =>
     href === "/" ? pathname === "/" : pathname.startsWith(href);

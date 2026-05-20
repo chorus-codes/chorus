@@ -132,15 +132,24 @@ export function enrichRounds(
       }
     }
     // Append any unexpected participants (defensive — shouldn't happen).
+    //
+    // Exception: in review-only templates, the runner creates a
+    // synthetic `doer-artifact` directory that holds the input artifact
+    // as `answer.md` (with the `## DONE` sentinel so the artifacts route
+    // marks it hasAnswer=true). It exists so SSE phase_progress events
+    // and the verdict aggregator have a doer participant to bind to —
+    // but the artifact is the PROMPT, not a participant. Without this
+    // filter the leftover loop appended a phantom DONE card showing the
+    // audit prompt text — Victor caught it on the PR #74 audit chat.
     for (const p of round.participants) {
-      if (!seen.has(p.participant)) {
-        enriched.push({
-          ...p,
-          ...(participantWarnings[p.participant]
-            ? { warnings: participantWarnings[p.participant] }
-            : {}),
-        });
-      }
+      if (seen.has(p.participant)) continue;
+      if (reviewOnly && p.role === "doer") continue;
+      enriched.push({
+        ...p,
+        ...(participantWarnings[p.participant]
+          ? { warnings: participantWarnings[p.participant] }
+          : {}),
+      });
     }
     return { ...round, participants: enriched };
   });

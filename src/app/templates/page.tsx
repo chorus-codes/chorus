@@ -2,7 +2,6 @@
 
 import { useCallback, useState, useEffect } from "react";
 import { Loader2, Pencil, Trash2 } from "lucide-react";
-import { AppShell } from "@/components/app-shell";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { PageHeader } from "@/components/page-header";
@@ -108,19 +107,16 @@ export default function TemplatesPage() {
 
   if (loadError) {
     return (
-      <AppShell>
         <div className="mx-auto w-full max-w-6xl px-4 py-6 sm:px-6 sm:py-8 md:px-8 md:py-10">
           <div className="rounded-lg border border-destructive/50 bg-destructive/10 p-4">
             <p className="text-sm text-destructive">Error loading templates</p>
             <p className="mt-1 text-xs text-muted-foreground">{loadError}</p>
           </div>
         </div>
-      </AppShell>
     );
   }
 
   return (
-    <AppShell>
       <div className="mx-auto w-full max-w-6xl px-4 py-6 sm:px-6 sm:py-8 md:px-8 md:py-10">
         <PageHeader
           eyebrow="Templates"
@@ -338,6 +334,5 @@ export default function TemplatesPage() {
           )}
         </div>
       </div>
-    </AppShell>
   );
 }

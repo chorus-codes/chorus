@@ -1,4 +1,3 @@
-import { AppShell } from "@/components/app-shell";
 import { PageHeader } from "@/components/page-header";
 import { RunsTable } from "@/components/runs-table";
 import { listChats, DaemonError } from "@/lib/api";
@@ -23,7 +22,6 @@ export default async function RunsListPage() {
   const { chats, error } = await getChats();
 
   return (
-    <AppShell>
       <div className="mx-auto w-full max-w-6xl px-4 py-6 sm:px-6 sm:py-8 md:px-8 md:py-10">
         <PageHeader
           eyebrow="History"
@@ -39,6 +37,5 @@ export default async function RunsListPage() {
 
         <RunsTable chats={chats} />
       </div>
-    </AppShell>
   );
 }

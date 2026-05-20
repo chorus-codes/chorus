@@ -2,7 +2,6 @@ import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
 import { notFound } from "next/navigation";
-import { AppShell } from "@/components/app-shell";
 import { LiveRunReal } from "@/components/live-run-real";
 import { getChat, getTemplate, DaemonError } from "@/lib/api";
 
@@ -214,7 +213,6 @@ export default async function RunPage({ params }: RunPageProps) {
   const initialRounds = readChatRounds(chat.id);
 
   return (
-    <AppShell>
       <LiveRunReal
         chatId={chat.id}
         initialStatus={chat.status}
@@ -226,6 +224,5 @@ export default async function RunPage({ params }: RunPageProps) {
         initialShipError={chat.shipError}
         initialVerdict={chat.verdict}
       />
-    </AppShell>
   );
 }

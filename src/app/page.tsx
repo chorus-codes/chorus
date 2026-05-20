@@ -1,7 +1,6 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import { Plus, Sparkles, Users } from "lucide-react";
-import { AppShell } from "@/components/app-shell";
 import { CliStatusPanel } from "@/components/cli-status-panel";
 import { HomeStatsCards } from "@/components/home-stats-cards";
 import { PageHeader } from "@/components/page-header";
@@ -58,8 +57,7 @@ export default async function HomePage() {
   const hasRuns = (stats?.totalRuns ?? 0) > 0;
 
   return (
-    <AppShell>
-      <div className="mx-auto w-full max-w-6xl px-4 py-6 sm:px-6 sm:py-8 md:px-8 md:py-10">
+    <div className="mx-auto w-full max-w-6xl px-4 py-6 sm:px-6 sm:py-8 md:px-8 md:py-10">
         {error && (
           <div className="mb-8 rounded-lg border border-destructive/50 bg-destructive/10 p-4">
             <p className="text-sm font-medium text-destructive">
@@ -107,8 +105,7 @@ export default async function HomePage() {
             </div>
           </section>
         )}
-      </div>
-    </AppShell>
+    </div>
   );
 }
 

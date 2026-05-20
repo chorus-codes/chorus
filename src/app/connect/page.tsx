@@ -1,4 +1,3 @@
-import { AppShell } from "@/components/app-shell";
 import { PageHeader } from "@/components/page-header";
 import {
   listOrchestrators,
@@ -71,7 +70,6 @@ export default async function ConnectPage() {
   }
 
   return (
-    <AppShell>
       <div className="mx-auto w-full max-w-6xl px-4 py-6 sm:px-6 sm:py-8 md:px-8 md:py-10">
         {error && (
           <div className="mb-6 rounded-lg border border-destructive/50 bg-destructive/10 p-4">
@@ -115,6 +113,5 @@ export default async function ConnectPage() {
           )}
         </section>
       </div>
-    </AppShell>
   );
 }

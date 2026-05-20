@@ -2,7 +2,6 @@
 
 import { useMemo, useState } from "react";
 import { Code2, Wrench } from "lucide-react";
-import { AppShell } from "@/components/app-shell";
 import { PageHeader } from "@/components/page-header";
 import { FormView } from "./form-view";
 import {
@@ -96,7 +95,6 @@ export default function SettingsPage() {
   );
 
   return (
-    <AppShell>
       <div className="mx-auto w-full max-w-6xl px-4 py-6 sm:px-6 sm:py-8 md:px-8 md:py-10">
         <PageHeader
           eyebrow="Settings"
@@ -163,6 +161,5 @@ export default function SettingsPage() {
           />
         )}
       </div>
-    </AppShell>
   );
 }

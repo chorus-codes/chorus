@@ -3,7 +3,6 @@
 import { Info, Layers } from "lucide-react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Suspense, useEffect, useMemo, useState, useTransition } from "react";
-import { AppShell } from "@/components/app-shell";
 import { PageHeader } from "@/components/page-header";
 import { Badge } from "@/components/ui/badge";
 import { createChat, DaemonError, listTemplates } from "@/lib/api";
@@ -21,9 +20,7 @@ export default function NewChatPage() {
   return (
     <Suspense
       fallback={
-        <AppShell>
           <div className="p-8 text-sm text-muted-foreground">Loading…</div>
-        </AppShell>
       }
     >
       <NewChatPageInner />
@@ -148,29 +145,24 @@ function NewChatPageInner() {
 
   if (loadError) {
     return (
-      <AppShell>
         <div className="mx-auto w-full max-w-6xl px-4 py-6 sm:px-6 sm:py-8 md:px-8 md:py-10">
           <div className="rounded-lg border border-destructive/50 bg-destructive/10 p-4">
             <p className="text-sm text-destructive">Error loading templates</p>
             <p className="mt-1 text-xs text-muted-foreground">{loadError}</p>
           </div>
         </div>
-      </AppShell>
     );
   }
 
   if (!template) {
     return (
-      <AppShell>
         <div className="mx-auto w-full max-w-6xl px-4 py-12 text-sm text-muted-foreground sm:px-6 md:px-8">
           Loading templates…
         </div>
-      </AppShell>
     );
   }
 
   return (
-    <AppShell>
       <div className="mx-auto w-full max-w-6xl px-4 py-6 sm:px-6 sm:py-8 md:px-8 md:py-10">
         <PageHeader
           eyebrow="New chat"
@@ -382,6 +374,5 @@ function NewChatPageInner() {
           </span>
         </button>
       </div>
-    </AppShell>
   );
 }
