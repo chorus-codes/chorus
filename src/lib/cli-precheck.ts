@@ -67,21 +67,19 @@ const CRED_PATHS: Record<CliLineage, () => string[]> = {
     path.join(os.homedir(), '.claude', '.credentials.json'),
     path.join(os.homedir(), '.config', 'anthropic', 'claude.json'),
   ],
-  // Codex's auth lives in $CODEX_HOME/auth.json. When the user (or
-  // chorus) points the shim at a non-default home (e.g. cdx-2 via
-  // CHORUS_CODEX_HOME, or a per-account `~/.codex-<id>/`), the precheck
-  // MUST probe the same dir or it would either:
-  //   - falsely block a valid configured account (the default path is
-  //     empty / logged out but the override has credentials), or
-  //   - falsely pass an empty selected account (default has credentials
-  //     but the selected override doesn't).
-  // Honour the same precedence ensureCodexHome() uses in codex.ts.
+  // Codex's auth lives in $CODEX_HOME/auth.json. Match ensureCodexHome()
+  // EXACTLY: when CHORUS_CODEX_HOME is set, the spawn uses ONLY that dir
+  // and never falls back to ~/.codex. The precheck must do the same, or
+  // we falsely pass an empty override (because ~/.codex still has creds
+  // from a different account) and the spawn dies on the actual auth
+  // probe — defeating the precheck. Convergent finding from PR #70
+  // audit (codex-cli-0 + antigravity-cli-8).
   openai: () => {
-    const homes: string[] = [];
     const override = process.env.CHORUS_CODEX_HOME?.trim();
-    if (override) homes.push(override);
-    homes.push(path.join(os.homedir(), '.codex'));
-    return homes.map((h) => path.join(h, 'auth.json'));
+    const home = override && override.length > 0
+      ? override
+      : path.join(os.homedir(), '.codex');
+    return [path.join(home, 'auth.json')];
   },
   google: () => [
     path.join(os.homedir(), '.gemini', 'oauth_creds.json'),
@@ -216,7 +214,7 @@ export async function precheckLineage(lineage: CliLineage): Promise<PrecheckResu
   // spawn turns one bad reviewer into a 30-minute chat. The cooldown buys
   // the user time to re-authenticate (or for cli-health to clear itself
   // when a different chat happens to succeed).
-  if (health.status === 'auth_invalid') {
+  if (health.status === 'auth_invalid' && typeof health.updatedAt === 'number') {
     const elapsed = Date.now() - health.updatedAt;
     if (elapsed >= 0 && elapsed < AUTH_INVALID_COOLDOWN_MS) {
       const minsLeft = Math.ceil((AUTH_INVALID_COOLDOWN_MS - elapsed) / 60_000);

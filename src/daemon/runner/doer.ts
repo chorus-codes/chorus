@@ -105,6 +105,13 @@ export async function runDoerHeadless(args: {
   fs.writeFileSync(answerFile, '');
   const writer = new StreamFileWriter(answerFile);
 
+  // Mirrors reviewer.ts: tracks whether the shim emitted ANY event. If
+  // not (CLI exits 0 with empty stdout — opencode 1.14.x writes only to
+  // /dev/tty, some legacy stubs do the same), the finally block
+  // synthesises a `no_output` failure so answer.md gets a structured
+  // `## DOER FAILED` block instead of silently being zero bytes.
+  let eventCount = 0;
+
   const stream = shim.runHeadless({
     cwd: doerCwd,
     promptText: askContent,
@@ -118,6 +125,7 @@ export async function runDoerHeadless(args: {
 
   try {
     for await (const event of stream) {
+      eventCount += 1;
       if (event.type === 'text_delta') {
         accumulated += event.text;
         writer.write(event.text);
@@ -350,6 +358,22 @@ export async function runDoerHeadless(args: {
     });
   } finally {
     writer.flushNow();
+    // Mirror reviewer.ts: synthesise a `no_output` failure when the CLI
+    // closed without emitting any event (silent failure mode — most
+    // often a CLI writing to /dev/tty instead of the pipe). Without this,
+    // the doer phase swallows the failure and the chat sits with a
+    // zero-byte answer.md and no error signal. PR #70 audit (gemini-cli-1)
+    // flagged the asymmetry between reviewer and doer.
+    if (eventCount === 0 && !errorSummary) {
+      errored = true;
+      errorSummary = {
+        kind: 'no_output',
+        message:
+          `${phase.doer.lineage} CLI closed without emitting any output. ` +
+          `Likely a transport bug (e.g. opencode 1.14.x writes JSON only to a TTY) ` +
+          `or a silent abort. Check the CLI's own log for details.`,
+      };
+    }
     // When the subprocess errored without a complete message_done, write
     // the error summary to answer.md so the chat dir is self-explanatory.
     // Append (not overwrite) when partial content survived so post-mortem

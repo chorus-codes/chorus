@@ -375,6 +375,15 @@ export function spawnHeadless(opts: SpawnHeadlessOptions): HeadlessRun {
   };
 
   // ─── stdin payload ─────────────────────────────────────────────────────
+  // Register an error listener BEFORE writing. If the child dies during
+  // the write the stdin pipe emits an async 'error' event (EPIPE) — with
+  // no listener, Node crashes the whole daemon process. The try/catch
+  // below only catches the synchronous throw path. PR #70 audit caught
+  // this (antigravity-cli-8 finding #4).
+  child.stdin.on('error', () => {
+    // intentional no-op — surfaced via the subsequent 'close' + non-zero
+    // exit if it actually matters.
+  });
   if (opts.stdinPayload !== undefined) {
     try {
       child.stdin.write(opts.stdinPayload);
