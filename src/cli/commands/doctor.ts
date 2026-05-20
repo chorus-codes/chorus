@@ -15,6 +15,12 @@
  *   - Concrete next step when a gap is detected.
  */
 import type { Command } from 'commander';
+import { readDaemonInfo } from '../../lib/daemon-discovery.js';
+import {
+  detectRuntimeEnv,
+  isRemoteDevEnv,
+  type RuntimeEnvInfo,
+} from '../runtime-env.js';
 import { c, header, sym } from '../ui.js';
 
 interface DoctorReport {
@@ -28,7 +34,22 @@ interface DoctorReport {
   capturedPath: string | null;
   daemonPath: string;
   manualPaths: Record<string, string>;
+  runtimeEnv: RuntimeEnvInfo;
+  /** ms since the daemon last (re)started, or null if no daemon.json. */
+  daemonAgeMs: number | null;
 }
+
+/**
+ * Below this age, we treat a restart as "recent" — the user is most
+ * likely to hit the port-forward staleness window in this slice and
+ * we should surface the known-issue hint loudly.
+ *
+ * Five minutes covers: the editor's proxy reconnect window after a
+ * restart, the typical "I ran chorus update and now the page is blank"
+ * debug timeline, and isn't so long that a healthy daemon noise-floor
+ * triggers the warning.
+ */
+const RECENT_RESTART_WINDOW_MS = 5 * 60 * 1000;
 
 async function gatherReport(): Promise<DoctorReport> {
   const { detectAllClis } = await import('../../lib/cli-detect.js');
@@ -45,11 +66,22 @@ async function gatherReport(): Promise<DoctorReport> {
     if (p) compactManual[id] = p;
   }
 
+  const info = readDaemonInfo();
+  let daemonAgeMs: number | null = null;
+  if (info?.startedAt) {
+    const started = Date.parse(info.startedAt);
+    if (Number.isFinite(started)) {
+      daemonAgeMs = Math.max(0, Date.now() - started);
+    }
+  }
+
   return {
     detection,
     capturedPath,
     daemonPath: process.env.PATH ?? '',
     manualPaths: compactManual,
+    runtimeEnv: detectRuntimeEnv(),
+    daemonAgeMs,
   };
 }
 
@@ -126,6 +158,10 @@ function printReport(r: DoctorReport): void {
     );
   }
 
+  if (isRemoteDevEnv(r.runtimeEnv)) {
+    printRemoteSessionSection(r);
+  }
+
   if (Object.keys(r.manualPaths).length > 0) {
     console.log('');
     console.log(c.bold('  Manual overrides'));
@@ -156,6 +192,55 @@ function printReport(r: DoctorReport): void {
     );
   }
   console.log('');
+}
+
+function formatDaemonAge(ms: number): string {
+  const totalSec = Math.round(ms / 1000);
+  if (totalSec < 60) return `${totalSec}s ago`;
+  const totalMin = Math.round(totalSec / 60);
+  if (totalMin < 60) return `${totalMin}m ago`;
+  const totalHr = Math.round(totalMin / 60);
+  if (totalHr < 24) return `${totalHr}h ago`;
+  return `${Math.round(totalHr / 24)}d ago`;
+}
+
+function printRemoteSessionSection(r: DoctorReport): void {
+  const editor =
+    r.runtimeEnv.kind === 'cursor-remote'
+      ? 'Cursor Remote-SSH'
+      : r.runtimeEnv.kind === 'codespaces'
+        ? 'GitHub Codespaces'
+        : 'VSCode Remote-SSH';
+
+  console.log('');
+  console.log(c.bold('  Remote session'));
+  console.log('');
+  console.log(`    ${sym.info} ${editor} detected.`);
+
+  if (r.daemonAgeMs === null) {
+    console.log(
+      `      ${c.dim('No running daemon — start one with ')}${c.bold('chorus start')}${c.dim('.')}`,
+    );
+    return;
+  }
+
+  const recent = r.daemonAgeMs < RECENT_RESTART_WINDOW_MS;
+  console.log(
+    `      Daemon started ${c.dim(formatDaemonAge(r.daemonAgeMs))}.`,
+  );
+
+  if (recent) {
+    console.log('');
+    console.log(
+      `    ${c.yellow('!')} Known-issue check: a recent restart can leave your editor's port-forward`,
+    );
+    console.log(
+      `      bound to the old daemon's PID, so ${c.cyan('http://127.0.0.1:5050')} loads blank.`,
+    );
+    console.log(
+      `      Open the ${c.bold('Ports')} panel and re-forward ${c.bold('5050')} to rebind.`,
+    );
+  }
 }
 
 export function registerDoctorCommand(program: Command): void {

@@ -76,3 +76,48 @@ export function detectRuntimeEnv(): RuntimeEnvInfo {
 export function shouldAutoOpenBrowser(env: RuntimeEnvInfo): boolean {
   return env.kind === 'native' || env.kind === 'wsl';
 }
+
+/**
+ * "Remote-dev" = an editor manages a tunnel to localhost on the user's
+ * laptop. VSCode Remote-SSH, Cursor Remote-SSH and Codespaces all cache
+ * port→PID bindings in their proxy layer. Plain `ssh -L` is user-managed
+ * and doesn't suffer from this — the user owns the lifecycle.
+ */
+export function isRemoteDevEnv(env: RuntimeEnvInfo): boolean {
+  return (
+    env.kind === 'vscode-remote' ||
+    env.kind === 'cursor-remote' ||
+    env.kind === 'codespaces'
+  );
+}
+
+/**
+ * Extra hint to print after a daemon restart on remote-dev hosts.
+ *
+ * Symptom we're catching: after `chorus stop && chorus start` (or the
+ * auto-drift restart in `chorus update`), the editor's port-forward
+ * proxy can keep routing :5050 at the *old* dead next-server PID. The
+ * browser then shows a blank page or "this site can't be reached" even
+ * though `curl localhost:5050` from the same shell works fine — the
+ * forwarded socket is bound, just to a corpse.
+ *
+ * The fix on the user's side is two clicks: open the editor's Ports
+ * panel, click the refresh / re-forward button on the 5050 row. We
+ * can't trigger that automatically (no editor API), but we CAN nudge
+ * the user toward it the moment they're most likely to hit the bug.
+ */
+export function remoteRestartHint(env: RuntimeEnvInfo): string {
+  if (!isRemoteDevEnv(env)) return '';
+  const editor =
+    env.kind === 'cursor-remote'
+      ? 'Cursor'
+      : env.kind === 'codespaces'
+        ? 'Codespaces'
+        : 'VSCode';
+  return (
+    `If the cockpit URL shows a blank page or "can't reach this site",\n` +
+    `    ${editor} is forwarding 5050 to the previous daemon's PID. In the\n` +
+    `    Ports panel, click the refresh icon (or "Stop Forwarding" then\n` +
+    `    "Forward a Port" → 5050) to rebind to the new daemon.`
+  );
+}

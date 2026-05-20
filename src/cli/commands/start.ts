@@ -23,7 +23,12 @@ import {
   killWithSudoAndVerify,
   pidLooksLikeChorus,
 } from '../port-utils.js';
-import { detectRuntimeEnv, shouldAutoOpenBrowser } from '../runtime-env.js';
+import {
+  detectRuntimeEnv,
+  isRemoteDevEnv,
+  remoteRestartHint,
+  shouldAutoOpenBrowser,
+} from '../runtime-env.js';
 import { pkg } from '../shared.js';
 import { c, header, sym, tip } from '../ui.js';
 import {
@@ -465,6 +470,13 @@ async function spawnCockpitForExistingDaemon(
     console.log('');
     console.log(tip(env.hint));
   }
+  // Cockpit just got a new PID. Same port-forward staleness concern
+  // as a full daemon restart.
+  const restart = remoteRestartHint(env);
+  if (restart) {
+    console.log('');
+    console.log(tip(restart));
+  }
   console.log('');
   if (shouldAutoOpenBrowser(env)) {
     await openBrowser(cockpitUrl);
@@ -766,6 +778,15 @@ async function spawnDaemonAndCockpit(
     if (env.hint) {
       console.log('');
       console.log(tip(env.hint));
+    }
+    // Fresh daemon spawn => new PID. On remote-dev hosts the editor's
+    // port-forward proxy may still be bound to the old PID, so the
+    // browser shows blank-page / connection-refused. Tell the user how
+    // to fix it before they hit it.
+    const restart = remoteRestartHint(env);
+    if (restart) {
+      console.log('');
+      console.log(tip(restart));
     }
   }
   console.log('');
