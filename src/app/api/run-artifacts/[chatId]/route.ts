@@ -10,6 +10,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
+import { AGENT_TO_UI_LINEAGE as AGENT_TO_LINEAGE } from "@/lib/agent-name-map";
 
 interface ParticipantSnapshot {
   participant: string;
@@ -43,14 +44,6 @@ interface SwapEntry {
   fromErrorKind?: string;
   fromErrorMessage?: string;
 }
-
-const AGENT_TO_LINEAGE: Record<string, string> = {
-  "claude-code": "claude",
-  "codex-cli": "codex",
-  "gemini-cli": "gemini",
-  "opencode-cli": "opencode",
-  "kimi-cli": "kimi",
-};
 
 /**
  * Full shape validation — sidecar is on disk and could be hand-edited

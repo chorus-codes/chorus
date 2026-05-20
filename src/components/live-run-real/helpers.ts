@@ -1,18 +1,15 @@
+import { UI_LINEAGE_TO_AGENT } from "@/lib/agent-name-map";
 import type { ReviewerLineage } from "@/lib/types";
 
 // Used when synthesising placeholder participants — picks a sensible
 // CLI name for the lineage in case the real spawn hasn't happened yet.
+// Sourced from the shared agent↔UI map so a new CLI lineage drops into
+// both directions automatically. The `openrouter` entry is a special
+// case: HTTP-dispatched voices write `reviewer-openrouter-<idx>` dirs
+// regardless of the underlying model lineage, so the placeholder card
+// must match that literal dir name.
 export const AGENT_LABEL: Record<string, string> = {
-  claude: "claude-code",
-  codex: "codex-cli",
-  gemini: "gemini-cli",
-  opencode: "opencode-cli",
-  kimi: "kimi-cli",
-  grok: "grok-cli",
-  antigravity: "antigravity-cli",
-  // Matches the on-disk dir name the runner creates for HTTP-dispatched
-  // voices (`reviewer-openrouter-<idx>`) so the synthesized pending card
-  // reconciles cleanly with the real participant once dispatch finishes.
+  ...UI_LINEAGE_TO_AGENT,
   openrouter: "openrouter",
 };
 
