@@ -17,26 +17,37 @@
  *   - `tryClaim(chatId, round, lineage, model)` — true on first claim,
  *     false if another slot in the same chat/round has ALREADY run or
  *     IS running this exact (lineage, model). Idempotent guard.
- *   - `release(...)` — called by the slot ONLY when its attempt FAILED
- *     (returned null or threw). On success, the claim is held through
- *     the round so a later sequential slot can't re-run the same
- *     (lineage, model) and produce a duplicate output. Idempotent.
+ *   - `release(...)` — called by the slot ONLY when its attempt THREW
+ *     (infrastructure error outside the model call — e.g. shim
+ *     resolution failure). A successful run OR a null result both
+ *     HOLD the claim for the round. Idempotent.
  *   - `resetRound(chatId, round)` — drops all claims for a chat/round.
  *     Called from runner on phase_done so a multi-round chat starts
  *     each round with a clean registry. This is the only path that
  *     releases successful claims.
  *
- * Why hold on success (and not just in-flight):
+ * Why hold on success AND null (diversity-first):
  *   With the daemon-wide CLI semaphore (chorus-102), reviewer slots
  *   often run sequentially, not in parallel. If we released the claim
- *   on success, slot A could finish a fallback target, release, and
- *   then slot B (whose chain reaches the same target) would re-claim
- *   it — two reviewers both running anthropic/claude-sonnet-4-6 on
- *   the same round, defeating lineage diversity. Holding the claim
- *   for the whole round forces B to advance to the next chain entry.
- *   On failure, we release so B can still try the same target — if it
- *   failed for A, that's a model-state failure, not a "model already
- *   covered" condition.
+ *   on any attempt, slot A could try the shared fallback, release,
+ *   then slots B and C would re-claim and re-try the SAME model.
+ *   That defeated diversity — three reviewer cards swapping to
+ *   claude-sonnet-4-6 in sequence (chat=019E45413E126AFCD83146524A22BFC4,
+ *   2026-05-20). The whole point of multi-LLM peer review collapses.
+ *
+ *   New rule (2026-05-20): first slot to reach a shared fallback
+ *   target wins it. Subsequent slots reaching the same target via
+ *   tryClaim see false and advance to the NEXT chain entry — fallback
+ *   collision warning lands on those cards. If the first slot's
+ *   attempt fails, the other slots simply have no backup. That's the
+ *   honest signal: "this template's one shared fallback didn't cover
+ *   all primary failures." Fix at the TEMPLATE layer by configuring
+ *   multiple fallbacks (one per likely-failing lineage), not by
+ *   recycling the same fallback across slots.
+ *
+ *   Throw still releases — a throw means something went wrong outside
+ *   the model call itself (e.g. shim could not be resolved), so other
+ *   slots SHOULD get a chance to try the target with a fresh shim.
  *
  * Why per-round, not per-chat:
  *   Round 2 reviewers are a fresh fan-out; their fallback targets

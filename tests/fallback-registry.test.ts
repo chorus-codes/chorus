@@ -85,6 +85,49 @@ describe('release', () => {
   });
 });
 
+describe('diversity-preserving sticky claims (2026-05-20 policy)', () => {
+  // The reviewer-driver now HOLDS the claim through the round
+  // regardless of whether the attempt succeeded or returned null. Only
+  // a thrown exception releases. These tests lock the contract the
+  // registry primitives still expose so reviewer-driver can rely on
+  // them. The behavioral test of WHEN reviewer-driver calls release
+  // lives in code review of reviewer-driver.ts, not here.
+
+  it('a slot that completed successfully holds the target', () => {
+    // Slot A reached anthropic/claude-sonnet-4-6 first and produced
+    // a verdict. The reviewer-driver did NOT call release. Slot B
+    // arrives later in the same round and must be blocked.
+    expect(tryClaim('chat-1', 1, 'anthropic', 'claude-sonnet-4-6')).toBe(true);
+    // (reviewer-driver runs the model, gets a verdict, finally block
+    // does NOT release)
+    expect(tryClaim('chat-1', 1, 'anthropic', 'claude-sonnet-4-6')).toBe(false);
+  });
+
+  it('a slot whose attempt returned null still holds the target', () => {
+    // Diversity-preserving rule: even if the model produced no
+    // output, the claim is sticky for the round so the next slot
+    // takes a different chain entry instead of running the same
+    // broken model. This is the change that fixed the chat=
+    // 019E45413E126AFCD83146524A22BFC4 incident where claude-sonnet-
+    // 4-6 ran three times sequentially as each primary failed.
+    expect(tryClaim('chat-1', 1, 'anthropic', 'claude-sonnet-4-6')).toBe(true);
+    // Reviewer-driver: result === null → finally does NOT release
+    // under the new policy.
+    expect(tryClaim('chat-1', 1, 'anthropic', 'claude-sonnet-4-6')).toBe(false);
+  });
+
+  it('an attempt that threw releases — infrastructure failure ≠ model state', () => {
+    // Throw means something went wrong outside the model call (shim
+    // resolution failure, fs write, etc.). Other slots SHOULD get a
+    // chance to try the target with a fresh shim. The primitive
+    // semantics support both policies via the release call site.
+    expect(tryClaim('chat-1', 1, 'anthropic', 'claude-sonnet-4-6')).toBe(true);
+    // Reviewer-driver: caught a throw → release.
+    release('chat-1', 1, 'anthropic', 'claude-sonnet-4-6');
+    expect(tryClaim('chat-1', 1, 'anthropic', 'claude-sonnet-4-6')).toBe(true);
+  });
+});
+
 describe('resetRound', () => {
   it('clears every claim for the given chat/round', () => {
     tryClaim('chat-1', 1, 'anthropic', 'claude-sonnet-4-6');

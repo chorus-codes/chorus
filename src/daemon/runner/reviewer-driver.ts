@@ -492,10 +492,42 @@ async function runReviewer(
           const entryShim = entry.lineage === candidate.lineage
             ? shim
             : pickShimForVoice(entry.lineage as Lineage, entry.model);
-          let result: Awaited<ReturnType<typeof runReviewerHeadless>> | undefined;
+          // Hold the claim through the round REGARDLESS of attempt
+          // outcome — diversity-preserving semantics for shared
+          // template fallbacks.
+          //
+          // The old behavior released the claim on null/throw so the
+          // next slot could retry the same fallback target. Rationale
+          // was "transient model failure shouldn't lock out other
+          // slots". But the user-visible result in
+          // chat=019E45413E126AFCD83146524A22BFC4 (2026-05-20) was
+          // three reviewer cards all swapping to claude-sonnet-4-6 in
+          // sequence — claude failed for slot A, released, slot B
+          // claimed and failed, released, slot C claimed and failed.
+          // Diversity collapse, the whole point of multi-LLM peer
+          // review defeated.
+          //
+          // New rule: claim is sticky for the round. First slot to
+          // reach a shared fallback target "wins" it. Subsequent slots
+          // reaching the same target via tryClaim get false and
+          // advance to the NEXT chain entry — fallback_collision
+          // warning lands on those cards, no duplicate run. If the
+          // first slot's attempt fails, the OTHER slots simply have no
+          // backup — they end in failed state, which is the honest
+          // signal that "this template's single shared fallback didn't
+          // cover all primaries". The user can fix that by configuring
+          // multiple fallbacks (one per likely-failing lineage) so
+          // each slot can take an independent backup.
+          //
+          // Throw still releases — a throw means something went wrong
+          // outside the model call (e.g. shim resolution failure), and
+          // the other slots should be allowed to try the target
+          // themselves. result === null is treated as "model ran but
+          // produced no output" — that's a real model outcome, not an
+          // infrastructure error.
           let threw = false;
           try {
-            result = await runReviewerHeadless({
+            return await runReviewerHeadless({
               shim: entryShim,
               chatId,
               phase,
@@ -510,18 +542,11 @@ async function runReviewer(
               abortSignal: handle.signal,
               onEvent,
             });
-            return result;
           } catch (err) {
             threw = true;
             throw err;
           } finally {
-            // Hold the claim through the round when the attempt
-            // succeeded — another slot reaching the same fallback
-            // target should advance instead of producing a duplicate
-            // output. Release only on failure (null or throw) so the
-            // next slot can still try this target. resetRound on
-            // phase_done clears successful claims for the next round.
-            if (threw || result === null) {
+            if (threw) {
               releaseFallbackClaim(chatId, round, entry.lineage, entry.model);
             }
           }
