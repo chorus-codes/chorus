@@ -2,6 +2,7 @@
 
 import { Clock, Shield } from "lucide-react";
 import { BillingModeSection } from "./billing-section";
+import { ChatConcurrencySection } from "./chat-concurrency-section";
 import { ConcurrencySection } from "./concurrency-section";
 import { PreviewSections, type PreviewSectionsProps } from "./preview-sections";
 import { Section } from "./primitives";
@@ -27,6 +28,7 @@ export function FormView(props: PreviewSectionsProps) {
 
       <TransportSection />
       <ConcurrencySection />
+      <ChatConcurrencySection />
       <BillingModeSection />
       <TelemetrySection />
 

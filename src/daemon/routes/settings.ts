@@ -180,6 +180,69 @@ export function registerSettingsRoutes(fastify: FastifyInstance): void {
     }
   });
 
+  // ─── Chat concurrency (daemon-wide max-active-chats + resource caps) ─
+  // Distinct from cli-concurrency above: this caps the NUMBER OF CHATS
+  // that can fan out reviewers simultaneously, plus refuses admission
+  // when swap/load are under pressure. Added after the 2026-05-20
+  // incident where 3 concurrent chats × 8 reviewers each crushed the
+  // host (load 320, swap exhausted).
+  fastify.get<{ Reply: ApiResponse<object> }>(
+    '/settings/chat-concurrency',
+    async () => {
+      try {
+        const { getChatConcurrency, _defaults } = await import(
+          '../../lib/settings/chat-concurrency.js'
+        );
+        const { snapshot } = await import('../chat-gate.js');
+        const { readResourceStats } = await import('../resource-stats.js');
+        return successResponse({
+          ...(await getChatConcurrency()),
+          defaults: _defaults,
+          // Live snapshot so the cockpit can show "currently 2/3 chats
+          // active, swap 4200MB free, load/core 1.2" alongside the
+          // sliders — actionable feedback rather than blind tuning.
+          live: {
+            ...snapshot(),
+            ...readResourceStats(),
+          },
+        });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Unknown error';
+        return errorResponse('internal', message);
+      }
+    },
+  );
+
+  fastify.put<{
+    Body: {
+      maxConcurrentChats?: number;
+      swapMinFreeMb?: number;
+      loadAvgMaxPerCore?: number;
+    };
+    Reply: ApiResponse<object>;
+  }>('/settings/chat-concurrency', async (request) => {
+    try {
+      const {
+        getChatConcurrency,
+        setChatConcurrency,
+        ChatConcurrencySchema,
+      } = await import('../../lib/settings/chat-concurrency.js');
+      const current = await getChatConcurrency();
+      const body = request.body ?? {};
+      const merged = {
+        maxConcurrentChats: body.maxConcurrentChats ?? current.maxConcurrentChats,
+        swapMinFreeMb: body.swapMinFreeMb ?? current.swapMinFreeMb,
+        loadAvgMaxPerCore: body.loadAvgMaxPerCore ?? current.loadAvgMaxPerCore,
+      };
+      const validated = ChatConcurrencySchema.parse(merged);
+      await setChatConcurrency(validated);
+      return successResponse(validated);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Unknown error';
+      return errorResponse('validation', message);
+    }
+  });
+
   // ─── Telemetry (anonymous heartbeat opt-out) ─────────────────────────
   fastify.get<{ Reply: ApiResponse<object> }>(
     '/settings/telemetry',

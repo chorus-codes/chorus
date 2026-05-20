@@ -146,6 +146,42 @@ export async function updateConcurrencySettings(
   });
 }
 
+export interface ChatConcurrencySettings {
+  maxConcurrentChats: number;
+  swapMinFreeMb: number;
+  loadAvgMaxPerCore: number;
+  defaults?: {
+    maxConcurrentChats: number;
+    swapMinFreeMb: number;
+    loadAvgMaxPerCore: number;
+    cpuCount: number;
+  };
+  live?: {
+    activeChats: number;
+    queueDepth: number;
+    swapFreeMb: number;
+    loadAvg1: number;
+    cpuCount: number;
+  };
+}
+
+export async function getChatConcurrencySettings(): Promise<ChatConcurrencySettings> {
+  return fetchFromDaemon<ChatConcurrencySettings>("/settings/chat-concurrency");
+}
+
+export async function updateChatConcurrencySettings(
+  patch: {
+    maxConcurrentChats?: number;
+    swapMinFreeMb?: number;
+    loadAvgMaxPerCore?: number;
+  },
+): Promise<ChatConcurrencySettings> {
+  return fetchFromDaemon<ChatConcurrencySettings>("/settings/chat-concurrency", {
+    method: "PUT",
+    body: JSON.stringify(patch),
+  });
+}
+
 export type BillingMode = "api" | "subscription" | "mixed";
 
 export interface BillingSettings {

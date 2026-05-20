@@ -22,7 +22,16 @@ export interface RunnerEvent {
      * Without this signal, a card whose answer.md is fully on-disk with
      * `## DONE` still rendered as WORKING for up to 8 seconds.
      */
-    | 'participant_done';
+    | 'participant_done'
+    /**
+     * Emitted by the chat-gate while a chat is waiting for admission
+     * (cap hit, low swap, high load). Payload carries `reason`
+     * (chats_at_cap | swap_low | load_high), `position` (1-indexed
+     * queue slot), and a human-readable `message`. Re-fires whenever
+     * the gate's state changes (another waiter joins, recheck fires).
+     * Cockpit renders "Queued — N chats ahead" or similar.
+     */
+    | 'chat_queued';
   payload: Record<string, unknown>;
   ts: number;
 }
