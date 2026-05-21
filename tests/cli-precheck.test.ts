@@ -179,6 +179,64 @@ describe('precheckLineage', () => {
       const result = await precheckLineage('openai');
       expect(result.ok).toBe(true);
     });
+
+    it('auto-heals when the user re-authenticated after the failure (cred mtime > updatedAt)', async () => {
+      // The real-world bug: user runs `codex login` after chorus saw a
+      // token_refresh_lost. The auth.json mtime jumps but cli_health
+      // status stays auth_invalid forever (no resetAt → no auto-clear).
+      // getHealth must detect the newer cred file and flip to healthy.
+      const { settings } = await import('@/lib/db');
+      const oldUpdatedAt = Date.now() - 5 * 60_000; // 5 min ago, INSIDE cooldown
+      await settings.set('cli_health.openai', {
+        lineage: 'openai',
+        status: 'auth_invalid',
+        message: 'token refresh failed',
+        updatedAt: oldUpdatedAt,
+      });
+      // Cred file mtime is newer than updatedAt → user re-authed.
+      writeFakeCred('.codex/auth.json');
+      const result = await precheckLineage('openai');
+      expect(result.ok).toBe(true);
+      // And the stored health should be flipped to healthy so the home
+      // page badge clears too.
+      const healed = await settings.get('cli_health.openai');
+      expect((healed as { status?: string }).status).toBe('healthy');
+    });
+
+    it('does NOT auto-heal when the cred file is OLDER than the recorded failure', async () => {
+      // Write the cred file FIRST, then record health AFTER. Now cred
+      // mtime < updatedAt → user hasn't re-authed since the failure, so
+      // the cooldown still applies.
+      writeFakeCred('.codex/auth.json');
+      // Pause briefly so the recordHealth timestamp is strictly later.
+      await new Promise((r) => setTimeout(r, 10));
+      await recordHealth({
+        lineage: 'openai',
+        status: 'auth_invalid',
+        message: 'token refresh failed',
+      });
+      const result = await precheckLineage('openai');
+      expect(result.ok).toBe(false);
+      if (!result.ok) expect(result.reason).toBe('auth_invalid_recent');
+    });
+
+    it('does NOT auto-heal when no cred file exists', async () => {
+      // Defensive — a sticky auth_invalid with no cred file is the
+      // "logged out and never re-authed" case. Don't flip to healthy.
+      await recordHealth({
+        lineage: 'openai',
+        status: 'auth_invalid',
+        message: 'token refresh failed',
+      });
+      const result = await precheckLineage('openai');
+      // The cred-gate (Layer 2) will block it anyway because the file
+      // doesn't exist — but we assert the auto-heal path did NOT lie
+      // upstream by checking the stored status is still auth_invalid.
+      expect(result.ok).toBe(false);
+      const { settings } = await import('@/lib/db');
+      const stored = await settings.get('cli_health.openai');
+      expect((stored as { status?: string }).status).toBe('auth_invalid');
+    });
   });
 
   describe('cred gate', () => {

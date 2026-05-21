@@ -72,14 +72,42 @@ export async function recordHealth(input: {
 
 export async function getHealth(lineage: CliLineage): Promise<CliHealth> {
   const raw = await settings.get(KEY(lineage));
-  if (raw && typeof raw === 'object' && 'status' in raw) {
-    return raw as CliHealth;
+  const stored: CliHealth =
+    raw && typeof raw === 'object' && 'status' in raw
+      ? (raw as CliHealth)
+      : { lineage, status: 'unknown', updatedAt: 0 };
+
+  // Auto-heal sticky auth_invalid when the credential file has been
+  // touched since the failure. `token_refresh_lost` (codex) and
+  // `mcp_handshake_failed` records have no resetAt, so clearStaleHealth
+  // never clears them — once tripped, the status persists until something
+  // explicitly writes `healthy`. That meant a user who ran `codex login`
+  // after a refresh-token race still saw "Auth broken" on the home page
+  // for hours, and precheckLineage's 10-min cooldown blocked every spawn.
+  // Comparing the cred file's mtime to updatedAt is the cheapest "user
+  // has re-authenticated" signal — no network call, no token parse.
+  //
+  // One-way: only heals auth_invalid → healthy. Doesn't downgrade healthy
+  // → anything; that's still owned by the runtime error-detector. Logged-
+  // out detection lives in precheckLineage's hasCredFile probe.
+  if (stored.status === 'auth_invalid' && stored.updatedAt > 0) {
+    // Dynamic import to avoid a module-level cycle (cli-precheck imports
+    // getHealth from this file). Node caches the module after first load,
+    // so repeat calls are cheap.
+    const { getMostRecentCredMtime } = await import('./cli-precheck.js');
+    const credMtime = getMostRecentCredMtime(lineage);
+    if (credMtime !== null && credMtime > stored.updatedAt) {
+      const healed: CliHealth = {
+        lineage,
+        status: 'healthy',
+        updatedAt: Date.now(),
+      };
+      await settings.set(KEY(lineage), healed);
+      return healed;
+    }
   }
-  return {
-    lineage,
-    status: 'unknown',
-    updatedAt: 0,
-  };
+
+  return stored;
 }
 
 export async function getAllHealth(): Promise<CliHealth[]> {

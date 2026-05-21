@@ -183,6 +183,36 @@ function hasCredFile(lineage: CliLineage): { exists: boolean; tried: string[] } 
   return { exists: false, tried: candidates };
 }
 
+/**
+ * Most recent mtime across the candidate credential paths for `lineage`,
+ * or null when none exist / are readable. Used by cli-health's auto-heal
+ * path: when the user runs `codex login` after chorus saw a
+ * token_refresh_lost, the auth file's mtime jumps but the cli_health
+ * status stays `auth_invalid` (it has no resetAt, so clearStaleHealth
+ * skips it). Comparing the file's mtime to the recorded updatedAt is the
+ * cheapest signal that "the user has re-authenticated since we last
+ * saw a failure."
+ *
+ * Returns mtime in ms-epoch (matching `Date.now()` / `health.updatedAt`).
+ * Falls back to mtimeMs over ctimeMs because chmod changes ctime — only
+ * mtime tracks content rewrites, which is what `codex login` produces.
+ */
+export function getMostRecentCredMtime(lineage: CliLineage): number | null {
+  const candidates = CRED_PATHS[lineage]();
+  let latest: number | null = null;
+  for (const p of candidates) {
+    try {
+      const stat = fs.statSync(p);
+      if (!stat.isFile()) continue;
+      const mtime = stat.mtimeMs;
+      if (latest === null || mtime > latest) latest = mtime;
+    } catch {
+      // ENOENT / perm-denied — try next candidate.
+    }
+  }
+  return latest;
+}
+
 export async function precheckLineage(lineage: CliLineage): Promise<PrecheckResult> {
   // Layer 1: quota state from cli-health (populated reactively when the
   // error-detector observes a quota_exhausted pane). If a previous run
