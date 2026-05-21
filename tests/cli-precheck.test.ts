@@ -208,8 +208,10 @@ describe('precheckLineage', () => {
       // mtime < updatedAt → user hasn't re-authed since the failure, so
       // the cooldown still applies.
       writeFakeCred('.codex/auth.json');
-      // Pause briefly so the recordHealth timestamp is strictly later.
-      await new Promise((r) => setTimeout(r, 10));
+      // Pause so the recordHealth timestamp is strictly later than the
+      // file's mtime. 50ms — comfortably above timer resolution on
+      // loaded CI boxes (10ms was flaky-prone per codex audit).
+      await new Promise((r) => setTimeout(r, 50));
       await recordHealth({
         lineage: 'openai',
         status: 'auth_invalid',

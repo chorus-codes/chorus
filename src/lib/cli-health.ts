@@ -90,6 +90,16 @@ export async function getHealth(lineage: CliLineage): Promise<CliHealth> {
   // One-way: only heals auth_invalid → healthy. Doesn't downgrade healthy
   // → anything; that's still owned by the runtime error-detector. Logged-
   // out detection lives in precheckLineage's hasCredFile probe.
+  //
+  // Known gap: macOS Keychain-only auth (Claude Code v2+) writes the
+  // bearer to Keychain instead of (or in addition to) the on-disk file.
+  // A user who re-auths via keychain WITHOUT touching the file won't
+  // trigger this auto-heal — getMostRecentCredMtime probes files only.
+  // For now we accept the gap; the standard `claude login` flow still
+  // rewrites `~/.claude/.credentials.json` in practice, so the heal
+  // fires for the common case. A keychain-mtime probe (via
+  // `security find-generic-password -w` modtime) is the natural next
+  // layer — flagged by codex in the PR #81 self-audit.
   if (stored.status === 'auth_invalid' && stored.updatedAt > 0) {
     // Dynamic import to avoid a module-level cycle (cli-precheck imports
     // getHealth from this file). Node caches the module after first load,
