@@ -195,18 +195,40 @@ export function reapOrphanProcesses(): { reaped: number; cleared: number } {
       const rec = JSON.parse(fs.readFileSync(recordPath, 'utf-8')) as PidRecord;
       // Check if the process is still alive.
       if (processIsAlive(rec.pid)) {
-        // Still alive — orphan. Send SIGTERM.
+        // Still alive — orphan. Send SIGTERM to the whole process group
+        // on Unix (we spawn children detached → each one is its own
+        // group leader, so -pid targets the group). On Windows or if
+        // negative-PID isn't supported, fall back to the single PID.
+        const isWindowsRec = process.platform === 'win32';
         try {
-          process.kill(rec.pid, 'SIGTERM');
+          if (!isWindowsRec) {
+            process.kill(-rec.pid, 'SIGTERM');
+          } else {
+            process.kill(rec.pid, 'SIGTERM');
+          }
         } catch {
-          /* ignore */
+          try {
+            // -pid can fail (e.g. on Windows or if the group has been
+            // dissolved); fall back to the head pid before giving up.
+            process.kill(rec.pid, 'SIGTERM');
+          } catch {
+            /* already gone */
+          }
         }
         // Schedule SIGKILL after grace; use unref so it doesn't block exit.
         const t = setTimeout(() => {
           try {
-            process.kill(rec.pid, 'SIGKILL');
+            if (!isWindowsRec) {
+              process.kill(-rec.pid, 'SIGKILL');
+            } else {
+              process.kill(rec.pid, 'SIGKILL');
+            }
           } catch {
-            // already gone
+            try {
+              process.kill(rec.pid, 'SIGKILL');
+            } catch {
+              // already gone
+            }
           }
         }, KILL_GRACE_MS);
         t.unref();
@@ -336,6 +358,15 @@ export function spawnHeadless(opts: SpawnHeadlessOptions): HeadlessRun {
     env: spawnEnv(opts.env),
     stdio: ['pipe', 'pipe', 'pipe'],
     shell: isWindows,
+    // Unix-only: spawn the child as its own process group leader so we
+    // can send SIGTERM/SIGKILL to the WHOLE group via `process.kill(-pid)`.
+    // Without this, killing only the head process (`child.kill()`) leaves
+    // any subprocesses it forked (e.g. codex's helper python procs,
+    // opencode's node workers) orphaned until they finish on their own.
+    // Windows has no process groups in this sense; child.kill calls
+    // TerminateProcess and the existing `shell: true` path already
+    // handles its own tree. (PR #74 codex audit follow-up.)
+    detached: !isWindows,
   });
 
   if (child.pid !== undefined) {
@@ -517,20 +548,30 @@ export function spawnHeadless(opts: SpawnHeadlessOptions): HeadlessRun {
   // it DOES still hold the closure (and the file-scope `child` ref).
   let killGraceTimer: NodeJS.Timeout | null = null;
 
+  // Send `sig` to the child's process group on Unix (detached: true
+  // above made the child its own group leader, so process.kill(-pid, sig)
+  // signals every descendant). Falls back to child.kill on Windows or
+  // when pid is undefined. Catches ESRCH ("process already gone") which
+  // is the common case when the child exited between signal-emit time
+  // and the SIGKILL timer firing.
+  const killTree = (sig: 'SIGTERM' | 'SIGKILL'): void => {
+    try {
+      if (!isWindows && typeof child.pid === 'number') {
+        process.kill(-child.pid, sig);
+      } else {
+        child.kill(sig);
+      }
+    } catch {
+      /* ESRCH or already-dead — fine */
+    }
+  };
+
   const sigtermThenKill = (reason: string): void => {
     if (killReason) return; // already killing
     killReason = reason;
-    try {
-      child.kill('SIGTERM');
-    } catch {
-      /* ignore */
-    }
+    killTree('SIGTERM');
     killGraceTimer = setTimeout(() => {
-      try {
-        child.kill('SIGKILL');
-      } catch {
-        /* ignore */
-      }
+      killTree('SIGKILL');
       killGraceTimer = null;
     }, KILL_GRACE_MS);
     killGraceTimer.unref();

@@ -15,6 +15,11 @@ import { waitForAnswer } from '../output-watcher.js';
 import * as participantAborts from '../participant-aborts.js';
 import type { TmuxManager } from '../tmux-types.js';
 import { runDoerHeadless } from './doer.js';
+import {
+  release as releaseFallbackClaim,
+  resetRound as resetFallbackRound,
+  tryClaim as tryClaimFallbackTarget,
+} from './fallback-registry.js';
 import { buildAsk } from './prompt-builder.js';
 import { runWithChainFallback, runWithModelFallback } from './run-with-fallback.js';
 import { sanitizeName } from './sanitize-name.js';
@@ -198,42 +203,28 @@ export async function runDoer(
       return await runWithChainFallback(
         chain,
         async (entry) => {
-          // Cross-lineage swap: when the entry's lineage differs from the
-          // doer's primary, re-resolve the shim. Slot identity (agentName,
-          // doerDir) stays bound to the primary lineage; cli_warning below
-          // surfaces the swap to the cockpit.
-          const entryShim = entry.lineage === phase.doer.lineage
-            ? shim
-            : pickShimForVoice(entry.lineage as Lineage, entry.model);
-          // Single-retry on transient kinds before advancing the chain.
-          // See reviewer-driver for full rationale and the kind taxonomy.
-          const MAX_ATTEMPTS = 2;
-          const RETRY_BACKOFF_MS = 1000;
-          for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
-            const lastError: { kind?: string; message?: string } = {};
-            const result = await runDoerHeadless({
-              shim: entryShim,
-              chatId,
-              phase,
-              round,
-              agentName,
-              askContent: ask,
-              answerFile,
-              doerCwd,
-              abortSignal: handle.signal,
-              onEvent,
-              modelOverride: entry.model,
-              lastError,
-            });
-            if (result !== null) return result;
-            if (attempt === MAX_ATTEMPTS) return null;
-            if (!isRetryableErrorKind(lastError.kind)) return null;
-            if (handle.signal.aborted) return null;
+          // Fallback-collision guard, mirroring reviewer-driver. The
+          // doer normally runs alone, but its fallback chain can end at
+          // the same shared template fallback target as the reviewer
+          // slots' chains (e.g. anthropic/claude-sonnet-4-6). Without
+          // this claim, the doer can run claude-sonnet-4-6 then a later
+          // reviewer slot also resolves to claude-sonnet-4-6 and runs
+          // it again — duplicate cost, lineage diversity broken. Sticky
+          // semantics: claim is held through the round on success and
+          // null; throw releases. See fallback-registry.ts for the full
+          // rationale (PR #79 audit, opencode-cli-5 finding).
+          const claimed = tryClaimFallbackTarget(
+            chatId,
+            round,
+            entry.lineage,
+            entry.model,
+          );
+          if (!claimed) {
             console.warn(
-              `[doer] retrying transient failure chat=${chatId} round=${round} ` +
+              `[doer] fallback collision chat=${chatId} round=${round} ` +
                 `agent=${agentName} ` +
                 `target=${entry.lineage}/${entry.model ?? '(default)'} ` +
-                `kind=${lastError.kind} attempt=${attempt + 1}/${MAX_ATTEMPTS}`,
+                `— another slot is already running it; advancing chain`,
             );
             onEvent({
               chatId,
@@ -243,15 +234,81 @@ export async function runDoer(
                 round,
                 role: 'doer',
                 agent: agentName,
-                reason: 'transient_retry',
-                message: `Transient ${lastError.kind ?? 'failure'} on ${entry.lineage}/${entry.model ?? '(default)'} — retrying once before advancing fallback.`,
+                reason: 'fallback_collision',
+                fromLineage: entry.lineage,
+                toLineage: entry.lineage,
+                fromModel: entry.model ?? '(default)',
+                toModel: entry.model ?? '(default)',
+                message: `Skipping ${entry.lineage}/${entry.model ?? '(default)'} — another slot is already running it. Advancing to next fallback to preserve lineage diversity.`,
               },
               ts: Date.now(),
             });
-            await abortableSleep(RETRY_BACKOFF_MS, handle.signal);
-            if (handle.signal.aborted) return null;
+            return null;
           }
-          return null;
+          let threw = false;
+          try {
+            // Cross-lineage swap: when the entry's lineage differs from the
+            // doer's primary, re-resolve the shim. Slot identity (agentName,
+            // doerDir) stays bound to the primary lineage; cli_warning below
+            // surfaces the swap to the cockpit.
+            const entryShim = entry.lineage === phase.doer.lineage
+              ? shim
+              : pickShimForVoice(entry.lineage as Lineage, entry.model);
+            // Single-retry on transient kinds before advancing the chain.
+            // See reviewer-driver for full rationale and the kind taxonomy.
+            const MAX_ATTEMPTS = 2;
+            const RETRY_BACKOFF_MS = 1000;
+            for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+              const lastError: { kind?: string; message?: string } = {};
+              const result = await runDoerHeadless({
+                shim: entryShim,
+                chatId,
+                phase,
+                round,
+                agentName,
+                askContent: ask,
+                answerFile,
+                doerCwd,
+                abortSignal: handle.signal,
+                onEvent,
+                modelOverride: entry.model,
+                lastError,
+              });
+              if (result !== null) return result;
+              if (attempt === MAX_ATTEMPTS) return null;
+              if (!isRetryableErrorKind(lastError.kind)) return null;
+              if (handle.signal.aborted) return null;
+              console.warn(
+                `[doer] retrying transient failure chat=${chatId} round=${round} ` +
+                  `agent=${agentName} ` +
+                  `target=${entry.lineage}/${entry.model ?? '(default)'} ` +
+                  `kind=${lastError.kind} attempt=${attempt + 1}/${MAX_ATTEMPTS}`,
+              );
+              onEvent({
+                chatId,
+                type: 'cli_warning',
+                payload: {
+                  phaseId: phase.id,
+                  round,
+                  role: 'doer',
+                  agent: agentName,
+                  reason: 'transient_retry',
+                  message: `Transient ${lastError.kind ?? 'failure'} on ${entry.lineage}/${entry.model ?? '(default)'} — retrying once before advancing fallback.`,
+                },
+                ts: Date.now(),
+              });
+              await abortableSleep(RETRY_BACKOFF_MS, handle.signal);
+              if (handle.signal.aborted) return null;
+            }
+            return null;
+          } catch (err) {
+            threw = true;
+            throw err;
+          } finally {
+            if (threw) {
+              releaseFallbackClaim(chatId, round, entry.lineage, entry.model);
+            }
+          }
         },
         (from, to, fromIdx) => {
           const sameLineage = from.lineage === to.lineage;
@@ -339,12 +396,16 @@ export async function runDoer(
   // Codex's slow cold-start (it auths + paints panels); shorter and the
   // Enter we send below races against the input box being ready and gets
   // eaten. Raise if a slower box still misses the prompt.
-  await new Promise((r) => setTimeout(r, 6000));
+  // abortableSleep so a cancelled chat doesn't wait the full 6s before
+  // teardown — PR #77 audit.
+  await abortableSleep(6000, abortSignal);
+  if (abortSignal.aborted) return null;
 
   tmuxMgr.pasteBuffer(session.name, prompt);
   // Small gap between paste and Enter so the TUI registers the paste before
   // we submit.
-  await new Promise((r) => setTimeout(r, 500));
+  await abortableSleep(500, abortSignal);
+  if (abortSignal.aborted) return null;
   tmuxMgr.sendKeys(session.name, ['Enter']);
 
   // Poll capture-pane every 2s to surface known CLI failure modes while we

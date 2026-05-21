@@ -178,7 +178,38 @@ export async function runReviewers(
           ts: Date.now(),
         });
       }
-    } catch {
+    } catch (err) {
+      // PR #77 audit: 4 reviewers converged on this catch swallowing
+      // exceptions silently. The phase loop recorded `'failed'` but no
+      // log, no cli_error event, and no phase_done — the cockpit slot
+      // card had no terminal signal and stayed visually stuck. Now we
+      // log the exception and emit cli_error so the slot transitions
+      // out of "running" and post-mortem inspection can find the
+      // actual stack trace.
+      const message = err instanceof Error ? err.message : String(err);
+      console.error(
+        `[reviewer] runOne crashed chat=${chatId} round=${round} ` +
+          `slot=${reviewerAgentLabel}: ${message}`,
+        err,
+      );
+      onEvent({
+        chatId,
+        type: 'cli_error',
+        payload: {
+          phaseId: phase.id,
+          phaseKind: phase.kind,
+          phaseIdx,
+          round,
+          role: 'reviewer',
+          agent: reviewerAgentLabel,
+          error: {
+            kind: 'reviewer_driver_crash',
+            message,
+            lineage: candidate.lineage,
+          },
+        },
+        ts: Date.now(),
+      });
       reviews.push({
         reviewer: `${candidate.lineage}-${idx}`,
         outcome: 'failed',
@@ -696,10 +727,14 @@ async function runReviewer(
   });
   // Wait for the CLI's TUI to finish cold-start before pasting (6s
   // covers Codex's slow cold-start). See doer-driver for rationale.
-  await new Promise((r) => setTimeout(r, 6000));
+  // abortableSleep so a cancelled chat doesn't wait the full 6s before
+  // teardown — PR #77 audit (multiple reviewers + opencode-cli-3).
+  await abortableSleep(6000, abortSignal);
+  if (abortSignal.aborted) return null;
 
   tmuxMgr.pasteBuffer(session.name, prompt);
-  await new Promise((r) => setTimeout(r, 500));
+  await abortableSleep(500, abortSignal);
+  if (abortSignal.aborted) return null;
   tmuxMgr.sendKeys(session.name, ['Enter']);
 
   // Failure-mode polling — same pattern as the doer.

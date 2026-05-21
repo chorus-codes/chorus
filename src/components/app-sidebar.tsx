@@ -116,20 +116,33 @@ export function SidebarBody({ onNavigate, collapsed = false, onToggleCollapsed }
 
   useEffect(() => {
     let cancelled = false;
+    // Monotonic sequence so a slow earlier request can't overwrite the
+    // result of a later one. Multiple triggers (mount, SSE event,
+    // visibility change, 2s poll) can fire concurrently — without
+    // this, the slowest reply lands last and the sidebar shows stale
+    // data even after a fresher fetch already returned. PR #77 audit
+    // followup.
+    let reqSeq = 0;
+    let latestSeq = 0;
 
     const fetchChats = async () => {
+      const mySeq = ++reqSeq;
       try {
         const list = await listChats({ limit: 12 });
         if (cancelled) return;
+        if (mySeq < latestSeq) return; // a newer request already won
+        latestSeq = mySeq;
         setChats(list);
         setChatsState("ready");
       } catch {
         if (cancelled) return;
+        if (mySeq < latestSeq) return;
         // Same display for known daemon-down vs unexpected errors —
         // the dead `instanceof DaemonError` ternary that used to live
         // here had both branches equal to "error". If we ever want to
         // differentiate (e.g. "Daemon offline" vs "Something broke")
         // add a new `chatsState` variant first.
+        latestSeq = mySeq;
         setChatsState("error");
       }
     };

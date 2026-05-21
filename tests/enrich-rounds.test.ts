@@ -119,6 +119,41 @@ describe('enrichRounds', () => {
     expect(pendingCount).toBe(7);
   });
 
+  it('does not let a participant with no -<idx> suffix collide with slot 0', () => {
+    // Pre-fix: parseInt(match ?? "0", 10) made non-conforming
+    // participant strings (e.g. "reviewer-codex-custom") fall back to
+    // idx=0, which then matched slot.reviewerIdx=0 and hijacked the
+    // first reviewer card. Now non-conforming names skip the match
+    // and go through the leftover loop.
+    //
+    // Slot lineage is the UI lineage, so openai → codex via the
+    // template→UI map. Match that on the custom participant too so we
+    // get past the lineage filter and exercise the index parser.
+    const round: RoundSnapshot = {
+      round: 1,
+      participants: [
+        {
+          // No trailing -<digit>. Pre-fix this would hijack slot 0.
+          participant: 'reviewer-codex-custom',
+          role: 'reviewer',
+          agentName: 'codex-cli',
+          lineage: 'codex' as never,
+          hasAnswer: true,
+          answer: 'lgtm',
+        },
+      ],
+    };
+    const enriched = enrichRounds([round], eightReviewerTemplate, {});
+    const slot0 = enriched[0].participants.find(
+      (p) => p.participant === 'reviewer-codex-0',
+    );
+    expect(slot0).toBeDefined();
+    // After the fix, slot 0 stays as a pending placeholder — the
+    // custom-named participant didn't claim it.
+    expect(slot0?.pending).toBe(true);
+    expect(slot0?.hasAnswer).toBe(false);
+  });
+
   it('does not synthesise round-1 when chat already has rounds (e.g. multi-round)', () => {
     // Defensive: if rounds is non-empty, the existing per-round loop
     // owns synthesis. The seed-empty branch must not double up.

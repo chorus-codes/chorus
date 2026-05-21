@@ -104,7 +104,17 @@ export function enrichRounds(
         if (slot.role === "doer") return p.role === "doer" && p.lineage === slot.lineage;
         if (p.role !== "reviewer") return false;
         if (p.lineage !== slot.lineage) return false;
-        const idxFromName = parseInt(p.participant.match(/-(\d+)$/)?.[1] ?? "0", 10);
+        // Non-conforming participant strings (no `-<digit>$` suffix)
+        // previously defaulted to 0 and silently matched slot 0 — a
+        // future MCP-created participant with a custom name could
+        // hijack the first reviewer card. Return a sentinel that no
+        // real slot index can equal so we treat non-conforming names
+        // as unmatched (correct: they go through the leftover-loop
+        // below, where they're identified by participant string, not
+        // by index).
+        const match = p.participant.match(/-(\d+)$/);
+        if (!match) return false;
+        const idxFromName = Number.parseInt(match[1], 10);
         return idxFromName === slot.reviewerIdx;
       });
       if (real) {
