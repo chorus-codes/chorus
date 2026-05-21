@@ -151,7 +151,15 @@ describe('precheckLineage', () => {
 
   describe('auth_invalid cooldown', () => {
     it('blocks when health is auth_invalid and updatedAt is recent', async () => {
+      // Force the cred file's mtime strictly BEFORE the recordHealth
+      // timestamp. fs.statSync().mtimeMs has sub-ms precision on some
+      // filesystems while Date.now() is ms-truncated — without this
+      // explicit utimes the new auto-heal path occasionally sees
+      // credMtime > updatedAt and heals when the test expects a block.
+      const credPath = path.join(fakeHome, '.codex/auth.json');
       writeFakeCred('.codex/auth.json');
+      const pastSec = (Date.now() - 60_000) / 1000;
+      fs.utimesSync(credPath, pastSec, pastSec);
       await recordHealth({
         lineage: 'openai',
         status: 'auth_invalid',
@@ -193,8 +201,11 @@ describe('precheckLineage', () => {
         message: 'token refresh failed',
         updatedAt: oldUpdatedAt,
       });
-      // Cred file mtime is newer than updatedAt → user re-authed.
+      // Cred file mtime explicitly set NEWER than updatedAt → user re-authed.
+      const credPath = path.join(fakeHome, '.codex/auth.json');
       writeFakeCred('.codex/auth.json');
+      const futureSec = (oldUpdatedAt + 60_000) / 1000;
+      fs.utimesSync(credPath, futureSec, futureSec);
       const result = await precheckLineage('openai');
       expect(result.ok).toBe(true);
       // And the stored health should be flipped to healthy so the home
@@ -204,14 +215,13 @@ describe('precheckLineage', () => {
     });
 
     it('does NOT auto-heal when the cred file is OLDER than the recorded failure', async () => {
-      // Write the cred file FIRST, then record health AFTER. Now cred
-      // mtime < updatedAt → user hasn't re-authed since the failure, so
-      // the cooldown still applies.
+      // Force the cred file's mtime to a definite past. Without explicit
+      // utimes, fs.statSync.mtimeMs vs integer Date.now() can collide on
+      // fast CI runners and flip the assertion.
+      const credPath = path.join(fakeHome, '.codex/auth.json');
       writeFakeCred('.codex/auth.json');
-      // Pause so the recordHealth timestamp is strictly later than the
-      // file's mtime. 50ms — comfortably above timer resolution on
-      // loaded CI boxes (10ms was flaky-prone per codex audit).
-      await new Promise((r) => setTimeout(r, 50));
+      const pastSec = (Date.now() - 60_000) / 1000;
+      fs.utimesSync(credPath, pastSec, pastSec);
       await recordHealth({
         lineage: 'openai',
         status: 'auth_invalid',
