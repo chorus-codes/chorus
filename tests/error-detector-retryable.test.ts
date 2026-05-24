@@ -11,13 +11,41 @@ import { describe, expect, it } from 'vitest';
 import { isRetryableErrorKind } from '@/daemon/error-detector';
 
 describe('isRetryableErrorKind', () => {
-  it('returns false for undefined kind', () => {
+  it('returns false for undefined kind (no lineage)', () => {
     // Happy-path null result with no recorded errorSummary — no retry.
     expect(isRetryableErrorKind(undefined)).toBe(false);
   });
 
   it('returns false for empty string', () => {
     expect(isRetryableErrorKind('')).toBe(false);
+  });
+
+  describe('opencode-null special case (PR #85)', () => {
+    it('returns TRUE for undefined kind when lineage is opencode', () => {
+      // Opencode-go's gateway has known transport flakes where the
+      // subprocess exits 0 with empty output (no errorKind, no message)
+      // but a second attempt succeeds. Without this the qwen-style
+      // null-with-no-kind failure goes straight to fallback chain
+      // advance, wasting the cheap save.
+      expect(isRetryableErrorKind(undefined, 'opencode')).toBe(true);
+    });
+
+    it('keeps the conservative default for other lineages on undefined kind', () => {
+      // codex/claude/gemini null-with-no-kind usually means the model
+      // genuinely produced nothing — retry would produce nothing again.
+      expect(isRetryableErrorKind(undefined, 'openai')).toBe(false);
+      expect(isRetryableErrorKind(undefined, 'anthropic')).toBe(false);
+      expect(isRetryableErrorKind(undefined, 'google')).toBe(false);
+      expect(isRetryableErrorKind(undefined, 'antigravity')).toBe(false);
+    });
+
+    it('the lineage hint does NOT override an explicit non-retryable kind', () => {
+      // Even on opencode, an auth/quota/db-corrupt kind is still
+      // terminal — retry would just produce the same error.
+      expect(isRetryableErrorKind('quota_exhausted', 'opencode')).toBe(false);
+      expect(isRetryableErrorKind('opencode_db_corrupt', 'opencode')).toBe(false);
+      expect(isRetryableErrorKind('no_output', 'opencode')).toBe(false);
+    });
   });
 
   describe('terminal kinds (never retry)', () => {
