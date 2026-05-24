@@ -276,7 +276,7 @@ export async function runDoer(
               });
               if (result !== null) return result;
               if (attempt === MAX_ATTEMPTS) return null;
-              if (!isRetryableErrorKind(lastError.kind, entry.lineage)) return null;
+              if (!isRetryableErrorKind(lastError.kind, entryShim)) return null;
               if (handle.signal.aborted) return null;
               console.warn(
                 `[doer] retrying transient failure chat=${chatId} round=${round} ` +

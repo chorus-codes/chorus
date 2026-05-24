@@ -20,31 +20,69 @@ describe('isRetryableErrorKind', () => {
     expect(isRetryableErrorKind('')).toBe(false);
   });
 
-  describe('opencode-null special case (PR #85)', () => {
-    it('returns TRUE for undefined kind when lineage is opencode', () => {
-      // Opencode-go's gateway has known transport flakes where the
-      // subprocess exits 0 with empty output (no errorKind, no message)
-      // but a second attempt succeeds. Without this the qwen-style
-      // null-with-no-kind failure goes straight to fallback chain
-      // advance, wasting the cheap save.
-      expect(isRetryableErrorKind(undefined, 'opencode')).toBe(true);
+  describe('shim-owned retry policy (PR #87 follow-up)', () => {
+    // Shape matches `Pick<AgentShim, 'retryPolicy'>`. Building tiny
+    // shim stubs keeps the classifier tests independent of the full
+    // AgentShim contract (formatPrompt, runHeadless, etc.).
+    const opencodeShim = {
+      retryPolicy: { onNullKind: true, onNoOutput: true },
+    };
+    const codexShim = { retryPolicy: undefined };
+    const claudeShim = {};
+    const customShim = {
+      retryPolicy: { extraKinds: ['shim_specific_blip' as string] },
+    };
+
+    it('retries on null kind when shim opts in via onNullKind', () => {
+      // Opencode-go gateway flake: events emitted but no usable content
+      // and no error event.
+      expect(isRetryableErrorKind(undefined, opencodeShim)).toBe(true);
     });
 
-    it('keeps the conservative default for other lineages on undefined kind', () => {
-      // codex/claude/gemini null-with-no-kind usually means the model
-      // genuinely produced nothing — retry would produce nothing again.
-      expect(isRetryableErrorKind(undefined, 'openai')).toBe(false);
-      expect(isRetryableErrorKind(undefined, 'anthropic')).toBe(false);
-      expect(isRetryableErrorKind(undefined, 'google')).toBe(false);
-      expect(isRetryableErrorKind(undefined, 'antigravity')).toBe(false);
+    it('does NOT retry on null kind when shim has no retryPolicy', () => {
+      // Codex/claude/gemini null-with-no-kind = model genuinely produced
+      // nothing. Retry would produce the same nothing.
+      expect(isRetryableErrorKind(undefined, codexShim)).toBe(false);
+      expect(isRetryableErrorKind(undefined, claudeShim)).toBe(false);
+      expect(isRetryableErrorKind(undefined)).toBe(false);
     });
 
-    it('the lineage hint does NOT override an explicit non-retryable kind', () => {
-      // Even on opencode, an auth/quota/db-corrupt kind is still
-      // terminal — retry would just produce the same error.
-      expect(isRetryableErrorKind('quota_exhausted', 'opencode')).toBe(false);
-      expect(isRetryableErrorKind('opencode_db_corrupt', 'opencode')).toBe(false);
-      expect(isRetryableErrorKind('no_output', 'opencode')).toBe(false);
+    it('retries on no_output when shim opts in via onNoOutput', () => {
+      // THE bug the original PR #87 missed: empty-stdout exit
+      // synthesises no_output (universally terminal), so the opencode
+      // null-kind path was unreachable for the most common opencode
+      // failure mode. onNoOutput closes that bypass.
+      expect(isRetryableErrorKind('no_output', opencodeShim)).toBe(true);
+    });
+
+    it('keeps no_output terminal for shims that did NOT opt in', () => {
+      expect(isRetryableErrorKind('no_output', codexShim)).toBe(false);
+      expect(isRetryableErrorKind('no_output', claudeShim)).toBe(false);
+      expect(isRetryableErrorKind('no_output')).toBe(false);
+    });
+
+    it('shim extraKinds list adds shim-specific retryable kinds', () => {
+      expect(isRetryableErrorKind('shim_specific_blip', customShim)).toBe(true);
+      // Same kind, no shim: stays terminal.
+      expect(isRetryableErrorKind('shim_specific_blip')).toBe(false);
+    });
+
+    it('shim policy does NOT override universal-terminal kinds', () => {
+      // Even an opencode shim with both flags on does NOT retry
+      // quota_exhausted / token_refresh_lost / opencode_db_corrupt —
+      // these are deterministic, retry would produce the same error.
+      expect(isRetryableErrorKind('quota_exhausted', opencodeShim)).toBe(false);
+      expect(isRetryableErrorKind('token_refresh_lost', opencodeShim)).toBe(false);
+      expect(isRetryableErrorKind('opencode_db_corrupt', opencodeShim)).toBe(false);
+    });
+
+    it('universal transient kinds retry regardless of shim presence', () => {
+      // The opt-in is for ADDITIONAL retries, not a gate on the
+      // universal set. A shim with no retryPolicy still gets the full
+      // universal transient behaviour.
+      expect(isRetryableErrorKind('stream_failure')).toBe(true);
+      expect(isRetryableErrorKind('stream_failure', codexShim)).toBe(true);
+      expect(isRetryableErrorKind('openrouter_503', codexShim)).toBe(true);
     });
   });
 

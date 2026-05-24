@@ -27,70 +27,72 @@ export interface CliError {
 
 /**
  * Decide whether a CLI failure is worth one immediate retry before
- * advancing the fallback chain. Most CLI calls succeed; the failure
- * cases that DO recur are deterministic — auth/quota/db-corrupt. The
- * cases that DON'T recur are transient — network blip mid-stream,
- * slow cold start, opencode DB lock that clears on the next attempt.
- * One retry catches the cheap save without doubling spend on real
- * outages (which fail twice and then advance as before).
+ * advancing the fallback chain. The decision is composed from TWO layers:
  *
- * Terminal (no retry — same call will fail the same way):
+ *   Universal layer (this function's switch + openrouter prefix check):
+ *     Kinds that any CLI/shim might produce, where retry is universally
+ *     safe — network blips, slow cold starts, generic stream failures.
+ *
+ *   Shim-owned layer (consulted via `retryPolicy` on AgentShim):
+ *     Each shim declares its own transport-specific transient signals.
+ *     Avoids leaking lineage-dispatch into this central classifier
+ *     (slippery-slope concern from PR #87 audit). To opt in for a new
+ *     lineage, add a `retryPolicy` block to its shim file — not a new
+ *     branch here.
+ *
+ * Universal terminal (no retry — same call will fail the same way):
  *   - quota_exhausted        quota window is server-scheduled
  *   - token_refresh_lost     human must re-authenticate
  *   - opencode_db_corrupt    local DB corruption persists
  *   - permission_prompt      needs user interaction or recoverKeys
  *
- * Transient (retry once):
+ * Universal transient (retry once):
  *   - cold_start_timeout     CLI was slow; second cold start may hit warm cache
  *   - tmux_dead              session crashed; respawn may succeed
- *   - stream_failure         catch-all from reviewer.ts when the stream
- *                            ends with no kind match — usually a brief
- *                            upstream blip
+ *   - stream_failure         catch-all when the stream ends with no kind match
  *   - unknown                same as stream_failure
- *   - mcp_handshake_failed   codex's bundled MCP server boots racily —
- *                            slow first start, handshake-timeout under
- *                            load, server crash on first start. The
- *                            error LOOKS auth-shaped (was originally
- *                            classified terminal for that reason) but
- *                            real auth failures surface as
- *                            token_refresh_lost. Retry catches the boot
- *                            race; a rare actual-misconfig fails twice
- *                            and advances as before. (Caught when codex
- *                            hit this on the PR #87 audit chat and went
- *                            straight to claude fallback without any
- *                            recovery attempt.)
- *   - openrouter_fetch_failed  pre-HTTP network error from the OpenRouter
- *                            shim — DNS blip, ECONNRESET mid-handshake,
- *                            ETIMEDOUT. Exactly the case retry is for.
- *                            (Flagged by codex in chorus self-audit on PR #79.)
- *   - openrouter_no_body     2xx response with empty body — anomalous
- *                            edge state at the OpenRouter edge; second
- *                            request normally succeeds.
+ *   - mcp_handshake_failed   codex's bundled MCP server boots racily — real
+ *                            auth failures surface as token_refresh_lost.
+ *                            (Reclassified in PR #89.)
+ *   - openrouter_fetch_failed  pre-HTTP network error (DNS, ECONNRESET, ETIMEDOUT)
+ *   - openrouter_no_body     2xx response with empty body
  *
- * Also retryable: HTTP-dispatched shim 5xx codes from OpenRouter (the
- * caller passes the `openrouter_<code>` kind verbatim — we accept any
- * 5xx as transient). 4xx codes (401/402/403/429) are NOT retried;
- * they're either auth/quota or already rate-limited. Retrying 429
- * immediately would just compound the rate-limit.
+ * Also retryable: OpenRouter 5xx HTTP codes (transient upstream outage).
+ * 4xx codes (401/402/403/429) stay terminal — auth/quota/rate-limit cases
+ * where retry just compounds the problem.
  *
- * Lineage-specific extension (PR #85): when `kind` is undefined AND
- * `lineage === 'opencode'`, treat as retryable. Opencode-go's gateway
- * has known transport flakes where the subprocess exits 0 with empty
- * output (no classified errorKind, no message) but a second attempt
- * succeeds. Other lineages keep the conservative "no kind = not
- * retryable" default — codex/claude/gemini's null-with-no-kind cases
- * usually mean the model genuinely produced nothing, where retry would
- * just produce nothing again. Victor caught the gap on the PR #83
- * audit (qwen3.6-plus on opencode produced null, no retry, straight to
- * claude fallback — wasted the cheap save).
+ * Shim-specific signals (via `retryPolicy` on the shim):
+ *   - extraKinds         additional kinds beyond the universal list
+ *   - onNullKind         retry when `lastError.kind === undefined`
+ *                        (opencode-go: events emitted but no usable content,
+ *                        no error event — transport flake)
+ *   - onNoOutput         retry when the run synthesised `kind: 'no_output'`
+ *                        because `eventCount === 0` (opencode-go: subprocess
+ *                        exited 0 with empty stdout — the common case the
+ *                        original PR #87 missed because no_output was in
+ *                        the universal terminal list)
+ *
+ * The `shim` parameter is optional for callers that don't have one in scope
+ * (e.g. classifier-only tests). When omitted, only the universal layer
+ * applies — no shim-specific retries fire.
  */
+import type { AgentShim } from './agents/types.js';
+
 export function isRetryableErrorKind(
   kind: string | undefined,
-  lineage?: string,
+  shim?: { retryPolicy?: AgentShim['retryPolicy'] },
 ): boolean {
+  const policy = shim?.retryPolicy;
+  // Shim-owned null-kind retry (was the PR #87 lineage-dispatch case).
   if (!kind) {
-    return lineage === 'opencode';
+    return policy?.onNullKind === true;
   }
+  // Shim-owned no_output retry — the COMMON opencode-go flake that the
+  // original PR #87 silently missed. Synthesised by the runner's finally
+  // block when eventCount === 0, and would otherwise be filtered as
+  // terminal below.
+  if (kind === 'no_output' && policy?.onNoOutput === true) return true;
+  // Universal transient switch.
   switch (kind) {
     case 'cold_start_timeout':
     case 'tmux_dead':
@@ -101,10 +103,14 @@ export function isRetryableErrorKind(
     case 'openrouter_no_body':
       return true;
   }
+  // OpenRouter HTTP-code escape: 5xx transient, 4xx terminal.
   if (kind.startsWith('openrouter_')) {
     const code = Number(kind.slice('openrouter_'.length));
-    return Number.isFinite(code) && code >= 500 && code < 600;
+    if (Number.isFinite(code) && code >= 500 && code < 600) return true;
   }
+  // Shim-owned extra kinds (after universal — a shim CAN add a kind the
+  // universal list considers terminal, but only via explicit opt-in).
+  if (policy?.extraKinds?.includes(kind)) return true;
   return false;
 }
 

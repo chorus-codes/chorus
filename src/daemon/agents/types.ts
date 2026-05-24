@@ -152,6 +152,39 @@ export interface AgentShim {
    * lineages return 0; API-keyed lineages use the rate card. Best-effort.
    */
   estimateCostUsd(inputTokens: number, outputTokens: number, model?: string): number;
+  /**
+   * Shim-owned retry policy. The runner consults this BEFORE consulting the
+   * universal `isRetryableErrorKind` taxonomy — letting each shim declare its
+   * own transport-specific transient failure modes without leaking
+   * lineage-dispatch into the central classifier (PR #87 audit feedback).
+   *
+   * Three orthogonal signals:
+   *   - `extraKinds`: shim-specific error kinds beyond the universal transient
+   *     list (e.g. an opencode-go-specific `provider_returned_error` could go
+   *     here if the shim ever emits it).
+   *   - `onNullKind`: retry when the run returned without setting any error
+   *     kind (`lastError.kind === undefined`). Opencode-go's gateway has a
+   *     transport flake where the subprocess emits some events but no usable
+   *     content with no error event — this catches that.
+   *   - `onNoOutput`: retry when the run exited with zero events (the finally
+   *     block synthesises `kind: 'no_output'`). For most lineages this is a
+   *     deterministic transport bug (e.g. TTY-only output), but for opencode-
+   *     go's empty-stdout-exit flake it's exactly the case we want to retry.
+   *     Closes the bug the original PR #87 missed: my opencode-null retry
+   *     was unreachable because empty-exit always synthesised `no_output`
+   *     terminal kind before the null-kind branch could see it (caught by
+   *     antigravity + gemini on the PR #87 self-audit).
+   *
+   * Omit entirely (or set all false) for shims that should keep the
+   * conservative universal-default behaviour — codex, claude, gemini all
+   * fall through to the universal list and retry only on documented
+   * transient kinds.
+   */
+  readonly retryPolicy?: {
+    readonly extraKinds?: readonly string[];
+    readonly onNullKind?: boolean;
+    readonly onNoOutput?: boolean;
+  };
 }
 
 /**

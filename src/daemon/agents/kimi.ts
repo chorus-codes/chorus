@@ -243,4 +243,17 @@ export const kimiShim: AgentShim = {
     // Kimi CLI uses Moonshot subscription on the user's plan, not metered API.
     return 0;
   },
+
+  // Same opencode-go gateway flake risk as the opencode shim — when the
+  // requested model carries the opencode-go/ prefix the kimi shim
+  // delegates to opencode internally (see runHeadless above). Inherit
+  // the same retry posture so moonshot lineages don't silently fall
+  // back without an attempt at the cheap recovery. Flagged by codex on
+  // the PR #87 self-audit ("isOpenCodeFamily" idiom appears throughout
+  // error-detector.ts; the original lineage dispatch only checked
+  // 'opencode' and left this gap open).
+  retryPolicy: {
+    onNullKind: true,
+    onNoOutput: true,
+  },
 };

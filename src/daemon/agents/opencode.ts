@@ -218,4 +218,23 @@ export const opencodeShim: AgentShim = {
     // OpenCode Go subscription plan (Kimi/DeepSeek), not per-call API
     return 0;
   },
+
+  // Opencode-go's gateway has two well-documented transient failure
+  // modes that look terminal at the runner layer:
+  //   - empty-stdout exit: subprocess exits 0 with no output -> the
+  //     runner synthesises kind:'no_output' (universally terminal),
+  //     but for opencode-go a second attempt typically succeeds with
+  //     the same prompt (gateway boot race).
+  //   - events-but-no-content: subprocess emits progress/tool events
+  //     then closes without a message_done and without any error
+  //     event -> kind stays undefined, content is empty.
+  // Both should be retried once. The original PR #87 attempted to
+  // address the second case with a lineage dispatch in the central
+  // classifier; the no_output case slipped through because no_output
+  // is in the universal terminal list. Moved here as part of the
+  // shim-owned retry refactor (PR #87 self-audit follow-up).
+  retryPolicy: {
+    onNullKind: true,
+    onNoOutput: true,
+  },
 };
