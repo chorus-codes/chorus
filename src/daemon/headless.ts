@@ -554,6 +554,14 @@ export function spawnHeadless(opts: SpawnHeadlessOptions): HeadlessRun {
   // when pid is undefined. Catches ESRCH ("process already gone") which
   // is the common case when the child exited between signal-emit time
   // and the SIGKILL timer firing.
+  //
+  // Known limitation: if a grandchild calls setsid() / spawns with its
+  // own `detached: true`, it creates a new process group and escapes
+  // `process.kill(-pid)`. Mainstream CLI helpers don't do this, but a
+  // future shim integration that wraps codex / opencode with a
+  // setsid'd worker would orphan that worker on cancel. Mitigation
+  // would be a shim-specific killer; flag for the integration if it
+  // arises. (Caught on PR #83 self-audit by opencode-cli-4 finding.)
   const killTree = (sig: 'SIGTERM' | 'SIGKILL'): void => {
     try {
       if (!isWindows && typeof child.pid === 'number') {
