@@ -594,7 +594,7 @@ async function runReviewer(
               });
               if (result !== null) return result;
               if (attempt === MAX_ATTEMPTS) return null;
-              if (!isRetryableErrorKind(lastError.kind)) return null;
+              if (!isRetryableErrorKind(lastError.kind, entry.lineage)) return null;
               if (handle.signal.aborted) return null;
               console.warn(
                 `[reviewer] retrying transient failure chat=${chatId} round=${round} ` +

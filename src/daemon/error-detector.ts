@@ -61,9 +61,25 @@ export interface CliError {
  * 5xx as transient). 4xx codes (401/402/403/429) are NOT retried;
  * they're either auth/quota or already rate-limited. Retrying 429
  * immediately would just compound the rate-limit.
+ *
+ * Lineage-specific extension (PR #85): when `kind` is undefined AND
+ * `lineage === 'opencode'`, treat as retryable. Opencode-go's gateway
+ * has known transport flakes where the subprocess exits 0 with empty
+ * output (no classified errorKind, no message) but a second attempt
+ * succeeds. Other lineages keep the conservative "no kind = not
+ * retryable" default — codex/claude/gemini's null-with-no-kind cases
+ * usually mean the model genuinely produced nothing, where retry would
+ * just produce nothing again. Victor caught the gap on the PR #83
+ * audit (qwen3.6-plus on opencode produced null, no retry, straight to
+ * claude fallback — wasted the cheap save).
  */
-export function isRetryableErrorKind(kind: string | undefined): boolean {
-  if (!kind) return false;
+export function isRetryableErrorKind(
+  kind: string | undefined,
+  lineage?: string,
+): boolean {
+  if (!kind) {
+    return lineage === 'opencode';
+  }
   switch (kind) {
     case 'cold_start_timeout':
     case 'tmux_dead':
