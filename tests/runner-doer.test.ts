@@ -262,4 +262,27 @@ describe('runDoerHeadless', () => {
     expect(res).not.toBeNull();
     expect(res!.usage).toBeUndefined();
   });
+
+  it('records cli_health healthy on success so sticky quota_exhausted clears', async () => {
+    // Mirror of the matching reviewer test — a sticky quota_exhausted
+    // marker with no resetAt was the symptom Victor caught on the
+    // home page: gemini ran fine but the Reviewer Fleet card still
+    // said "Quota out". The runner now writes healthy on every
+    // successful CLI run, symmetric to what openrouter + local
+    // shims already do.
+    const { recordHealth, getHealth } = await import('@/lib/cli-health');
+    await recordHealth({
+      lineage: 'anthropic',
+      status: 'quota_exhausted',
+      message: 'stale quota marker',
+    });
+    const before = await getHealth('anthropic');
+    expect(before.status).toBe('quota_exhausted');
+
+    const handle = makeFakeShim({ events: happyPathEvents('done\n## DONE') });
+    await callDoer(handle);
+
+    const after = await getHealth('anthropic');
+    expect(after.status).toBe('healthy');
+  });
 });

@@ -515,5 +515,23 @@ export async function runReviewerHeadless(args: {
   if (errored && content.trim().length === 0) return null;
   if (content.trim().length === 0) return null;
 
+  // Record healthy on success so a stale quota_exhausted / auth_invalid
+  // record from a prior session clears. Without this, the Reviewer
+  // Fleet card stays "Quota out" / "Auth broken" even after the CLI
+  // recovers — exactly the gemini bug Victor caught on the PR #83
+  // audit (gemini produced a clean review but its home-page badge
+  // still said "Quota out 3 models enabled"). OpenRouter + local
+  // shims already do this; CLI-backed lineages were the gap.
+  if (isKnownHealthLineage(candidateLineage)) {
+    recordHealth({ lineage: candidateLineage, status: 'healthy' }).catch(
+      (err: unknown) => {
+        const msg = err instanceof Error ? err.message : String(err);
+        console.warn(
+          `[reviewer] recordHealth(healthy) failed for ${candidateLineage}: ${msg}`,
+        );
+      },
+    );
+  }
+
   return verdictFromReviewerText(content);
 }

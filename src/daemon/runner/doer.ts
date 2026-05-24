@@ -475,6 +475,22 @@ export async function runDoerHeadless(args: {
   // `accumulated.length > 0`, regardless of `errored` state.
   const isFull = !errored && (finalText !== undefined || accumulated.length > 0);
 
+  // Record healthy on success so a stale quota_exhausted / auth_invalid
+  // record from a prior session clears. Mirrors the reviewer.ts hook —
+  // see that block for the full rationale. Gated on `isFull` so a
+  // crashed mid-stream doer doesn't lie about CLI health.
+  if (isFull && isKnownHealthLineage(phase.doer.lineage)) {
+    recordHealth({
+      lineage: phase.doer.lineage as CliLineage,
+      status: 'healthy',
+    }).catch((err: unknown) => {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.warn(
+        `[doer] recordHealth(healthy) failed for ${phase.doer.lineage}: ${msg}`,
+      );
+    });
+  }
+
   return {
     content,
     full: isFull,

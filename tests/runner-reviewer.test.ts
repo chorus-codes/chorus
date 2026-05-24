@@ -240,6 +240,29 @@ describe('runReviewerHeadless', () => {
     expect(verdict).toBe(true);
   });
 
+  it('records cli_health healthy on success so sticky quota_exhausted clears', async () => {
+    // Pre-seed cli_health.openai with a stale quota_exhausted record
+    // (no resetAt — the exact case clearStaleHealth can't fix). After
+    // a successful reviewer run, the new "record healthy on success"
+    // hook should flip it to healthy so the home page badge clears.
+    const { recordHealth, getHealth } = await import('@/lib/cli-health');
+    await recordHealth({
+      lineage: 'openai',
+      status: 'quota_exhausted',
+      message: 'stale quota marker',
+    });
+    const before = await getHealth('openai');
+    expect(before.status).toBe('quota_exhausted');
+
+    const handle = makeFakeShim({
+      events: happyPathEvents(`${PADDING}\napprove\n## DONE`),
+    });
+    await callReviewer(handle);
+
+    const after = await getHealth('openai');
+    expect(after.status).toBe('healthy');
+  });
+
   // This test forces an EACCES on the writer's appendFileSync via chmod
   // 0o444. Root bypasses POSIX permission bits on Linux, so the test only
   // works when the test process runs as a non-root user. CI and `pnpm test`
