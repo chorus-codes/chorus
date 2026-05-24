@@ -37,7 +37,6 @@ export interface CliError {
  * Terminal (no retry — same call will fail the same way):
  *   - quota_exhausted        quota window is server-scheduled
  *   - token_refresh_lost     human must re-authenticate
- *   - mcp_handshake_failed   auth issue, same remediation
  *   - opencode_db_corrupt    local DB corruption persists
  *   - permission_prompt      needs user interaction or recoverKeys
  *
@@ -48,6 +47,18 @@ export interface CliError {
  *                            ends with no kind match — usually a brief
  *                            upstream blip
  *   - unknown                same as stream_failure
+ *   - mcp_handshake_failed   codex's bundled MCP server boots racily —
+ *                            slow first start, handshake-timeout under
+ *                            load, server crash on first start. The
+ *                            error LOOKS auth-shaped (was originally
+ *                            classified terminal for that reason) but
+ *                            real auth failures surface as
+ *                            token_refresh_lost. Retry catches the boot
+ *                            race; a rare actual-misconfig fails twice
+ *                            and advances as before. (Caught when codex
+ *                            hit this on the PR #87 audit chat and went
+ *                            straight to claude fallback without any
+ *                            recovery attempt.)
  *   - openrouter_fetch_failed  pre-HTTP network error from the OpenRouter
  *                            shim — DNS blip, ECONNRESET mid-handshake,
  *                            ETIMEDOUT. Exactly the case retry is for.
@@ -85,6 +96,7 @@ export function isRetryableErrorKind(
     case 'tmux_dead':
     case 'stream_failure':
     case 'unknown':
+    case 'mcp_handshake_failed':
     case 'openrouter_fetch_failed':
     case 'openrouter_no_body':
       return true;

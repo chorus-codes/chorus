@@ -61,10 +61,6 @@ describe('isRetryableErrorKind', () => {
       expect(isRetryableErrorKind('token_refresh_lost')).toBe(false);
     });
 
-    it('mcp_handshake_failed is terminal', () => {
-      expect(isRetryableErrorKind('mcp_handshake_failed')).toBe(false);
-    });
-
     it('opencode_db_corrupt is terminal', () => {
       // Local DB corruption persists across retries.
       expect(isRetryableErrorKind('opencode_db_corrupt')).toBe(false);
@@ -103,6 +99,16 @@ describe('isRetryableErrorKind', () => {
     it('unknown is retryable', () => {
       // Same treatment as stream_failure.
       expect(isRetryableErrorKind('unknown')).toBe(true);
+    });
+
+    it('mcp_handshake_failed is retryable (codex MCP boot race)', () => {
+      // Was originally terminal (lumped with auth) but real auth
+      // surfaces as token_refresh_lost. mcp_handshake_failed is
+      // almost always codex's bundled MCP server booting racily —
+      // catches the cheap save without compounding cost on genuine
+      // misconfig. Caught when codex hit this on the PR #87 audit
+      // chat and went straight to claude fallback with no recovery.
+      expect(isRetryableErrorKind('mcp_handshake_failed')).toBe(true);
     });
   });
 
