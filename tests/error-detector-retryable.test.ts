@@ -76,6 +76,15 @@ describe('isRetryableErrorKind', () => {
       expect(isRetryableErrorKind('opencode_db_corrupt', opencodeShim)).toBe(false);
     });
 
+    it('verdict_ambiguous is terminal even on opencode shim (PR #91 audit catch)', () => {
+      // A reviewer that wrote non-empty prose but no approve/reject
+      // keyword is NOT a transport flake. The runner now sets
+      // lastError.kind='verdict_ambiguous' so the opencode shim's
+      // onNullKind=true policy can't accidentally retry it.
+      expect(isRetryableErrorKind('verdict_ambiguous', opencodeShim)).toBe(false);
+      expect(isRetryableErrorKind('verdict_ambiguous')).toBe(false);
+    });
+
     it('universal transient kinds retry regardless of shim presence', () => {
       // The opt-in is for ADDITIONAL retries, not a gate on the
       // universal set. A shim with no retryPolicy still gets the full

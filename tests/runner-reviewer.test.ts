@@ -156,6 +156,36 @@ describe('runReviewerHeadless', () => {
     expect(verdict).toBeNull();
   });
 
+  it('classifies ambiguous-verdict as verdict_ambiguous so opencode retry does NOT fire on apology-shaped responses', async () => {
+    // PR #91 audit catch: a reviewer that writes non-empty prose but
+    // no approve/reject keyword returns null. Pre-fix, lastError.kind
+    // stayed undefined → the new opencode shim's onNullKind=true
+    // policy fired a retry that wasted tokens on the same shape.
+    // Post-fix, lastError.kind is set to 'verdict_ambiguous' which is
+    // not in any retry list, so the driver advances the chain cleanly.
+    const text = `${PADDING} ${PADDING} the code seems consistent with the rest of the codebase.\n## DONE`;
+    const handle = makeFakeShim({ events: happyPathEvents(text) });
+    const lastError: { kind?: string; message?: string } = {};
+    const verdict = await runReviewerHeadless({
+      shim: handle.shim,
+      chatId: 'test-chat',
+      phase: fixturePhase,
+      round: 1,
+      reviewerIdx: 0,
+      candidateLineage: 'openai',
+      candidateModel: 'gpt-5.5',
+      agentName: 'codex-cli',
+      askContent: 'review the doer output',
+      answerFile,
+      reviewerDir,
+      abortSignal: new AbortController().signal,
+      onEvent: (e) => events.push(e),
+      lastError,
+    });
+    expect(verdict).toBeNull();
+    expect(lastError.kind).toBe('verdict_ambiguous');
+  });
+
   it('returns null when stream errors with no content', async () => {
     const handle = makeFakeShim({
       events: [{ type: 'error', kind: 'quota_exhausted', message: 'limit hit' }],

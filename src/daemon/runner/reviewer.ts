@@ -533,5 +533,30 @@ export async function runReviewerHeadless(args: {
     );
   }
 
-  return verdictFromReviewerText(content);
+  const verdict = verdictFromReviewerText(content);
+  // PR #91 audit catch (multiple reviewers, MEDIUM-HIGH): when the
+  // reviewer produces non-empty content but verdictFromReviewerText
+  // can't extract a positive/negative keyword, it returns null. The
+  // caller (reviewer-driver retry loop) sees `result === null` with
+  // `lastError.kind === undefined` — and the new opencode-shim
+  // retryPolicy.onNullKind=true causes a retry. But this case ISN'T
+  // a transport flake — the model successfully wrote prose that just
+  // doesn't match the verdict heuristic (apology, refusal, off-topic).
+  // Retrying it produces the same shape on the next attempt — wasted
+  // tokens. Setting an explicit `verdict_ambiguous` kind classifies
+  // this as terminal (not in the universal transient list, not opted
+  // in by any shim) so the retry skips and the chain advances.
+  //
+  // Guarded on !lastError.kind so the classifier doesn't stomp a real
+  // classified kind set by the finally block (e.g. when an errored
+  // stream wrote a `## REVIEWER FAILED` block to answer.md — content
+  // is non-empty so verdictFromReviewerText returns null, but the
+  // failure was classified earlier as `stream_failure` /
+  // `quota_exhausted` / etc. and that signal must survive).
+  if (verdict === null && lastError && !lastError.kind) {
+    lastError.kind = 'verdict_ambiguous';
+    lastError.message =
+      'Reviewer wrote non-empty content but no approve/reject verdict was detected.';
+  }
+  return verdict;
 }
