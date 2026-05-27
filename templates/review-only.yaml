@@ -51,7 +51,7 @@ phases:
             - opencode-go/deepseek-v4-pro
         - lineage: opencode
           models:
-            - opencode-go/qwen3.6-plus
+            - opencode-go/qwen3.7-max
     artifact:
       label: "Artifact to review"
       hint: "Paste a unified diff, a markdown draft, code, or any text blob."
