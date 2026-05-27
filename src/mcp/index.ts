@@ -141,9 +141,16 @@ mcpServer.registerTool(
         void sendProgress(msg);
       });
 
+      // Do NOT embed `progressEvents` in the response. Every event was
+      // already streamed live via `notifications/progress` (see sendProgress
+      // above); duplicating them here only inflates the tool result.
+      // An 8-reviewer chat routinely produced 50KB+ payloads that exceeded
+      // the MCP client's per-result token budget — the client then spills
+      // the whole blob to a file and forces a chunked re-read. `eventCount`
+      // gives callers the cardinality for debug without the bloat.
       const response = {
         ...(result as Record<string, unknown>),
-        events: progressEvents,
+        eventCount: progressEvents.length,
       };
 
       return {
