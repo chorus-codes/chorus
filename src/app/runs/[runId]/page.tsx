@@ -44,23 +44,23 @@ async function getRunData(runId: string) {
   return { chat, template };
 }
 
-const AGENT_TO_LINEAGE: Record<string, "claude" | "codex" | "gemini" | "opencode" | "kimi" | "openrouter"> = {
-  "claude-code": "claude",
-  "codex-cli": "codex",
-  "gemini-cli": "gemini",
-  "opencode-cli": "opencode",
-  "kimi-cli": "kimi",
-  // HTTP-dispatched shim — runner creates `reviewer-openrouter-N` dirs;
-  // without this entry the lineage fell through to "claude" and rendered
-  // OpenRouter answers with the wrong brand on the run page.
-  openrouter: "openrouter",
-};
+// Single-source-of-truth map shared with the cockpit API route and the
+// run-viewer types. The previous inline copy here was missing
+// `antigravity-cli` and `grok-cli` — those participants fell through to
+// the `?? "claude"` default at the lookup site and the SSR snapshot
+// rendered phantom CLAUDE cards alongside the synthesized ANTIGRAVITY
+// placeholder. The /api/run-artifacts route reads AGENT_TO_UI_LINEAGE
+// (which has the full map), so a client-side poll later reclassified the
+// participant and the phantom vanished — "appears on refresh, goes away
+// after seconds" was exactly that drift.
+import { AGENT_TO_UI_LINEAGE as AGENT_TO_LINEAGE } from "@/lib/agent-name-map";
+import type { ReviewerLineage } from "@/lib/types";
 
 interface ParticipantSnapshot {
   participant: string;
   role: "doer" | "reviewer";
   agentName: string;
-  lineage: "claude" | "codex" | "gemini" | "opencode" | "kimi" | "openrouter";
+  lineage: ReviewerLineage;
   hasAnswer: boolean;
   answer?: string;
   findingsPreview?: string[];
@@ -100,7 +100,14 @@ function readChatRounds(chatId: string): RoundSnapshot[] {
       .map((d) => {
         const role: "doer" | "reviewer" = d.name.startsWith("doer-") ? "doer" : "reviewer";
         const rawAgent = d.name.replace(/^(doer-|reviewer-)/, "").replace(/-\d+$/, "");
-        const lineage = AGENT_TO_LINEAGE[rawAgent] ?? "claude";
+        // Mirror /api/run-artifacts route: pass the raw agent name
+        // through when unknown so the run-page banner shows the actual
+        // CLI name. The hardcoded "claude" fallback misclassified every
+        // future CLI as a phantom claude card. The cast widens the lookup
+        // result back to the ReviewerLineage union — `displayLineage` and
+        // the lineage-maps tolerate unknown strings by falling through to
+        // the lowercased label.
+        const lineage = (AGENT_TO_LINEAGE[rawAgent] ?? rawAgent) as ReviewerLineage;
         const answerPath = path.join(roundDir, d.name, "answer.md");
         // hasAnswer must mirror the API route: gated on the `## DONE`
         // sentinel so a mid-stream doer doesn't render as "done · no

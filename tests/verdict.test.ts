@@ -182,4 +182,104 @@ describe('verdictFromReviewerText', () => {
       ).toBe(true);
     });
   });
+
+  describe('severity-style reviews — implicit request_changes', () => {
+    // The actual gemini-3.1-pro-preview output from chat
+    // 019E6E3318873C26DCA60409B84F90E9 that the heuristic previously
+    // misclassified as null → verdict_ambiguous → wasted fallback chain.
+    const realGeminiReview =
+      `Here are the findings from reviewing the dual-source enrichment pipeline.\n\n` +
+      `### CRITICAL\n\n` +
+      `**1. PCA Index Builder is Non-Functional (Always Empty)**\n` +
+      `In \`pca_index.py\`, the \`build_index\` function never actually calls the \`_entry_from_item\` helper to normalize the data. ` +
+      `It iterates over the raw PCA API response and immediately attempts to use \`out[entry["key"]] = entry\`. ` +
+      `Since the raw PCA dictionary lacks a normalized \`"key"\` field, this will either raise a KeyError or use an incorrect internal ID.\n\n` +
+      `### HIGH\n\n` +
+      `**2. Unhandled PCA Exceptions Crash the Entire Item's Enrichment**\n` +
+      `In \`enrich_listing.py\`, the future completion loop lacks a generic except block for the PCA thread.\n## DONE`;
+
+    it('classifies the real gemini severity-style review as request_changes', () => {
+      expect(verdictFromReviewerText(realGeminiReview)).toBe(false);
+    });
+
+    it('### CRITICAL header with substantive body returns false', () => {
+      const text =
+        '### CRITICAL\n\nThe migration drops the index without rebuilding it, ' +
+        PAD.repeat(2) +
+        '\n## DONE';
+      expect(verdictFromReviewerText(text)).toBe(false);
+    });
+
+    it('**HIGH** bold header with substantive body returns false', () => {
+      const text =
+        '**HIGH**: race condition in queue claim — ' +
+        PAD.repeat(2) +
+        '\n## DONE';
+      expect(verdictFromReviewerText(text)).toBe(false);
+    });
+
+    it('### MEDIUM alone (no CRITICAL/HIGH) stays ambiguous (null)', () => {
+      // MEDIUM is advisory — without an explicit request_changes prose,
+      // the verdict stays null so the slot doesn't auto-block.
+      const text =
+        '### MEDIUM\n\nConsider adding a comment here. ' +
+        PAD.repeat(2) +
+        '\n## DONE';
+      expect(verdictFromReviewerText(text)).toBeNull();
+    });
+
+    it('### CRITICAL with short body (<200 chars) stays ambiguous', () => {
+      // Guards against a passing-mention "critical bug" comment being
+      // misclassified as a substantive rejection.
+      expect(verdictFromReviewerText('### CRITICAL\nnit\n## DONE')).toBeNull();
+    });
+
+    // Codex + gemini caught this false-positive class in the chorus
+    // self-review 019E6E7A5D1DF943AD275D5595460D9A. The trailing
+    // lookahead in verdict.ts now requires the severity word to be
+    // followed by a heading terminator (`:`, `\n`, `**`, EOL) so
+    // hyphen-prefix prose can't masquerade as a severity header.
+    it('`### High-level review` is NOT a severity header (codex review)', () => {
+      const text =
+        '### High-level review\n\nThe approach is sound and the implementation is clean. ' +
+        PAD.repeat(2) +
+        '\n## DONE';
+      expect(verdictFromReviewerText(text)).toBeNull();
+    });
+
+    it('`### High confidence` is NOT a severity header (codex review)', () => {
+      const text =
+        '### High confidence\n\nI have high confidence in this change. ' +
+        PAD.repeat(2) +
+        '\n## DONE';
+      expect(verdictFromReviewerText(text)).toBeNull();
+    });
+
+    it('`**High-traffic endpoint**` is NOT a severity header (codex review)', () => {
+      const text =
+        '**High-traffic endpoint**: this code path serves the homepage. ' +
+        PAD.repeat(2) +
+        '\n## DONE';
+      expect(verdictFromReviewerText(text)).toBeNull();
+    });
+
+    it('`### Critical considerations` is NOT a severity header', () => {
+      const text =
+        '### Critical considerations\n\nA few things to think about. ' +
+        PAD.repeat(2) +
+        '\n## DONE';
+      expect(verdictFromReviewerText(text)).toBeNull();
+    });
+
+    it('### CRITICAL followed by explicit LGTM tail still approves', () => {
+      // Contradictory review — explicit positive verdict in the tail
+      // wins over the implicit severity signal. Reviewer's final word
+      // is the truth-bearing signal.
+      const text =
+        '### CRITICAL\n\nThe issue I called out is now resolved. ' +
+        PAD.repeat(2) +
+        '\nOverall LGTM.\n## DONE';
+      expect(verdictFromReviewerText(text)).toBe(true);
+    });
+  });
 });

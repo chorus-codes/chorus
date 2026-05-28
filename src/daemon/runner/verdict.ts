@@ -47,6 +47,30 @@ export function verdictFromReviewerText(content: string): boolean | null {
   const positives =
     /\b(approve(?:d|s)?|lgtm|looks good to me|no concerns|ship it|ack)\b/;
 
+  // Severity-style reviews: gemini, grok, and several opencode-go models
+  // routinely structure findings as `### CRITICAL` / `**HIGH**` sections
+  // with substantive bodies but no explicit approve/reject prose. The
+  // earlier verdict heuristic returned null on these — burning the
+  // reviewer's $0.05+ spend, firing the fallback chain, and producing
+  // contradictory cockpit cards. A reviewer who flags CRITICAL/HIGH
+  // severity issues clearly wants changes; treat as implicit
+  // request_changes. MEDIUM/LOW are advisory and stay ambiguous.
+  //
+  // Trailing lookahead — `(?=\s*(?:[:\n]|\*\*|$))` — requires the
+  // severity word to be followed by a heading terminator: colon, end
+  // of line, end of string, or closing bold. Without it, prose like
+  // `### High-level review` or `**High-traffic endpoint**` matched via
+  // `\b` (hyphen is a word boundary) and forced an implicit reject.
+  // Codex + gemini both caught this in the chorus self-review
+  // 019E6E7A5D1DF943AD275D5595460D9A — convergent-dissenter rule
+  // applied. Stricter regex misses some valid loose forms (e.g.
+  // `### CRITICAL bug here`) but mid-text false-positive rejections
+  // are worse than missed implicit signals — when in doubt, leave
+  // verdict null and let the reviewer be explicit. 200-char floor
+  // still applies on top.
+  const severityHeader =
+    /(?:^|\n)\s*(?:#{1,6}\s+|\*\*\s*)(?:[\d.]+\s+)?(critical|high)(?=\s*(?:[:\n]|\*\*|$))/i;
+
   const whole = stripped.toLowerCase();
   const tail = stripped.slice(-400).toLowerCase();
 
@@ -59,6 +83,17 @@ export function verdictFromReviewerText(content: string): boolean | null {
   // through to positives once we've confirmed there's no rejection
   // anywhere in the text.
   if (negatives.test(whole)) return false;
+
+  // Severity-section second pass — between negatives and positives so
+  // an explicit `LGTM` tail still wins over the implicit signal (a
+  // contradictory review like "### CRITICAL bug … LGTM" is rare and
+  // best surfaced as positive so the reviewer's explicit final word
+  // counts). Tested against the original stripped text (not lowercased)
+  // because the regex is case-insensitive and section headers are
+  // typically uppercase in real reviews.
+  if (stripped.length >= 200 && severityHeader.test(stripped)) {
+    if (!positives.test(tail) && !positives.test(whole)) return false;
+  }
 
   // Positives prefer the tail so an analytical review mentioning
   // "good practice" mid-paragraph doesn't get auto-approved without an

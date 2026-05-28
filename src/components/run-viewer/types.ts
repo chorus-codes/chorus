@@ -111,6 +111,17 @@ export interface FallbackSwap {
   fromErrorKind?: string;
   /** One-line message from the failing attempt; trimmed to ~200 chars. */
   fromErrorMessage?: string;
+  /** True iff the TO voice was the LAST writer of `_stats.json` for
+   *  this slot (the runner stamps lineage+model on every successful
+   *  `message_done`). Not "did it run at all" — a fallback that
+   *  ran-and-failed before message_done won't stamp stats and will
+   *  report false here. For the UI gate (suppress banner when primary
+   *  has answer + no swap actuallyRan), this is the right semantic:
+   *  the banner mismatch only matters when the displayed answer is the
+   *  primary's, which means no successful fallback writer overrode it.
+   *  Previously the UI inferred "actually ran" from `isLast` in the
+   *  swaps array — wrong for collision/exhausted chains. */
+  actuallyRan?: boolean;
 }
 
 export interface RoundSnapshot {

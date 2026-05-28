@@ -223,6 +223,15 @@ export async function runReviewerHeadless(args: {
             path.join(reviewerDir, '_stats.json'),
             JSON.stringify({
               durationMs: Date.now() - startedAt,
+              // Lineage + model stamp lets the run-artifacts route
+              // tell whether the LAST voice that succeeded was the
+              // primary or a fallback. Without this stamp the cockpit
+              // can't distinguish "fallback actually ran" from
+              // "fallback collided, primary's answer is what's shown"
+              // — and renders contradictory banners on collision-
+              // exhausted slots like the bowerbird gemini case.
+              lineage: candidateLineage,
+              ...(candidateModel ? { model: candidateModel } : {}),
               ...(usageForStats ? { usage: usageForStats } : {}),
             }),
             'utf-8',
@@ -434,6 +443,13 @@ export async function runReviewerHeadless(args: {
     // lands regardless of how the run exits (success, error, abort).
     // Append-only JSONL keyed by (round, model) so multi-step fallback
     // chains leave a trail.
+    //
+    // Errored path only — silent failures (empty content, no error event,
+    // verdict_ambiguous) are written below at the null-return sites so
+    // zero rows in _attempts.jsonl genuinely means "no failure to log",
+    // not "diagnostic gap". Bowerbird chat 019E6E3318873C26DCA60409B84F90E9
+    // had a kimi slot that fell through to fallback with NO _attempts row
+    // and NO daemon log line — that gap is what this refactor closes.
     if (errored) {
       const errorKind = errorSummary?.kind ?? 'unknown';
       const errorMessage = errorSummary?.message ?? '(no message captured)';
@@ -445,33 +461,16 @@ export async function runReviewerHeadless(args: {
         lastError.kind = errorKind;
         lastError.message = errorMessage;
       }
-      const durationMs = Date.now() - startedAt;
-      try {
-        const attemptsFile = path.join(reviewerDir, '_attempts.jsonl');
-        const entry = {
-          ts: Date.now(),
-          round,
-          lineage: candidateLineage,
-          model: candidateModel ?? null,
-          errorKind,
-          errorMessage,
-          durationMs,
-        };
-        fs.appendFileSync(attemptsFile, JSON.stringify(entry) + '\n');
-      } catch {
-        /* best-effort — diagnostics shouldn't fail the run */
-      }
-      // Daemon-log line — same content as the JSONL row but at the
-      // daemon level so a single tail of ~/.chorus/logs/daemon.log
-      // shows every failed reviewer attempt across every chat without
-      // walking per-chat dirs. Grep-friendly key=value format mirrors
-      // the openrouter shim's own warn lines.
-      console.warn(
-        `[reviewer] attempt failed chat=${chatId} round=${round} ` +
-          `lineage=${candidateLineage} model=${candidateModel ?? '(default)'} ` +
-          `kind=${errorKind} duration_ms=${durationMs} ` +
-          `message=${JSON.stringify(errorMessage).slice(0, 300)}`,
-      );
+      writeAttemptRow({
+        reviewerDir,
+        chatId,
+        round,
+        lineage: candidateLineage,
+        model: candidateModel,
+        kind: errorKind,
+        message: errorMessage,
+        durationMs: Date.now() - startedAt,
+      });
     }
     // Mirror runDoerHeadless: surface answer.md write failures as a
     // cli_warning so the user sees "stream stopped writing" instead of
@@ -513,7 +512,31 @@ export async function runReviewerHeadless(args: {
   const streamed = finalText && finalText.length > 0 ? finalText : accumulated;
   const content = onDisk.trim().length > 0 ? onDisk : streamed;
   if (errored && content.trim().length === 0) return null;
-  if (content.trim().length === 0) return null;
+  if (content.trim().length === 0) {
+    // Silent-failure path: stream ended without an error event AND
+    // produced no usable content. Previously this returned null with no
+    // _attempts.jsonl row and no daemon log line, leaving the operator
+    // with no record of why a fallback fired. Synthesise a kind +
+    // diagnostic row so every null return is traceable.
+    if (lastError && !lastError.kind) {
+      lastError.kind = 'empty_no_error';
+      lastError.message =
+        'CLI exited without writing usable content to answer.md and without emitting an error event.';
+    }
+    writeAttemptRow({
+      reviewerDir,
+      chatId,
+      round,
+      lineage: candidateLineage,
+      model: candidateModel,
+      kind: lastError?.kind ?? 'empty_no_error',
+      message:
+        lastError?.message ??
+        'CLI exited without writing usable content to answer.md and without emitting an error event.',
+      durationMs: Date.now() - startedAt,
+    });
+    return null;
+  }
 
   // Record healthy on success so a stale quota_exhausted / auth_invalid
   // record from a prior session clears. Without this, the Reviewer
@@ -557,6 +580,58 @@ export async function runReviewerHeadless(args: {
     lastError.kind = 'verdict_ambiguous';
     lastError.message =
       'Reviewer wrote non-empty content but no approve/reject verdict was detected.';
+    writeAttemptRow({
+      reviewerDir,
+      chatId,
+      round,
+      lineage: candidateLineage,
+      model: candidateModel,
+      kind: 'verdict_ambiguous',
+      message: lastError.message,
+      durationMs: Date.now() - startedAt,
+    });
   }
   return verdict;
+}
+
+/**
+ * Append a diagnostic row to `_attempts.jsonl` and emit the matching
+ * `[reviewer] attempt failed …` daemon log line. Called from every path
+ * that returns a non-positive result (errored, empty-content, verdict-
+ * ambiguous) so post-mortem grep across reviewer-slot _attempts.jsonl
+ * sidecars shows every reason a slot fell back. Best-effort writes —
+ * diagnostic failure must never fail the run.
+ */
+function writeAttemptRow(args: {
+  reviewerDir: string;
+  chatId: string;
+  round: number;
+  lineage: string;
+  model: string | undefined;
+  kind: string;
+  message: string;
+  durationMs: number;
+}): void {
+  const { reviewerDir, chatId, round, lineage, model, kind, message, durationMs } = args;
+  try {
+    const attemptsFile = path.join(reviewerDir, '_attempts.jsonl');
+    const entry = {
+      ts: Date.now(),
+      round,
+      lineage,
+      model: model ?? null,
+      errorKind: kind,
+      errorMessage: message,
+      durationMs,
+    };
+    fs.appendFileSync(attemptsFile, JSON.stringify(entry) + '\n');
+  } catch {
+    /* best-effort — diagnostics shouldn't fail the run */
+  }
+  console.warn(
+    `[reviewer] attempt failed chat=${chatId} round=${round} ` +
+      `lineage=${lineage} model=${model ?? '(default)'} ` +
+      `kind=${kind} duration_ms=${durationMs} ` +
+      `message=${JSON.stringify(message).slice(0, 300)}`,
+  );
 }

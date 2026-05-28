@@ -621,6 +621,39 @@ async function runReviewer(
             return null;
           } catch (err) {
             threw = true;
+            // Thrown exceptions bypass reviewer.ts's _attempts.jsonl
+            // writer (the finally there only writes on errored=true,
+            // and a throw from spawn/timeout/abort never sets that
+            // flag). Without this row, the operator sees "fallback
+            // fired" with no record of why. Append a structurally-
+            // identical diagnostic before re-throwing so post-mortem
+            // grep across _attempts.jsonl is uniform across crash
+            // mode (errored, silent, thrown).
+            const message =
+              err instanceof Error ? err.message : String(err);
+            try {
+              const attemptsFile = path.join(reviewerDir, '_attempts.jsonl');
+              fs.appendFileSync(
+                attemptsFile,
+                JSON.stringify({
+                  ts: Date.now(),
+                  round,
+                  lineage: entry.lineage,
+                  model: entry.model ?? null,
+                  errorKind: 'runtime_error',
+                  errorMessage: message,
+                  durationMs: 0,
+                }) + '\n',
+              );
+            } catch {
+              /* best-effort */
+            }
+            console.warn(
+              `[reviewer] attempt threw chat=${chatId} round=${round} ` +
+                `slot=${agentName}-${reviewerIdx} ` +
+                `lineage=${entry.lineage} model=${entry.model ?? '(default)'} ` +
+                `kind=runtime_error message=${JSON.stringify(message).slice(0, 300)}`,
+            );
             throw err;
           } finally {
             if (threw) {

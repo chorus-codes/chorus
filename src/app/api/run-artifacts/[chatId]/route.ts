@@ -43,6 +43,13 @@ interface SwapEntry {
   ts: number;
   fromErrorKind?: string;
   fromErrorMessage?: string;
+  /** True iff the TO voice's run wrote `_stats.json` for this slot
+   *  (lineage + model stamp matches the slot's final _stats.json).
+   *  False when the chain advanced past this entry via collision or
+   *  exhaustion. UI uses this to gate the fallback banner so a slot
+   *  whose primary produced the displayed answer doesn't render a
+   *  misleading "fallback fired / actually ran" badge. */
+  actuallyRan?: boolean;
 }
 
 /**
@@ -138,6 +145,31 @@ function readChatSwaps(chatId: string): SwapEntry[] {
           // the swap's fromModel. Lets the UI render "kimi-k2.6 failed:
           // cli_failed — model not found" instead of a bare arrow.
           const attemptsByModel = readAttemptsByModel(partDir);
+          // Read the slot's `_stats.json` to find which lineage/model
+          // actually produced the final answer.md. reviewer.ts stamps
+          // `lineage` + `model` on every successful completion; the
+          // LAST writer wins. We use this to mark `actuallyRan: true`
+          // on only the swap entry whose `to` matches the final
+          // writer. Collision-exhausted chains (gemini → sonnet where
+          // sonnet was claimed elsewhere) leave _stats.json carrying
+          // the primary's stamp, so no swap entry gets actuallyRan —
+          // and the UI suppresses the misleading banners.
+          let finalLineage: string | undefined;
+          let finalModel: string | undefined;
+          try {
+            const statsPath = path.join(partDir, "_stats.json");
+            if (fs.existsSync(statsPath)) {
+              const stats = JSON.parse(fs.readFileSync(statsPath, "utf-8"));
+              if (typeof stats?.lineage === "string") {
+                finalLineage = stats.lineage;
+              }
+              if (typeof stats?.model === "string") {
+                finalModel = stats.model;
+              }
+            }
+          } catch {
+            /* malformed stats — leave finalLineage undefined */
+          }
           for (const entry of parsed) {
             const valid = isValidSwapEntry(entry);
             if (!valid) continue;
@@ -146,6 +178,10 @@ function readChatSwaps(chatId: string): SwapEntry[] {
               valid.fromErrorKind = att.errorKind;
               valid.fromErrorMessage = att.errorMessage;
             }
+            const toMatchesFinal =
+              finalLineage === valid.toLineage &&
+              (finalModel ?? null) === (valid.toModel ?? null);
+            valid.actuallyRan = toMatchesFinal;
             out.push(valid);
           }
         }

@@ -203,16 +203,28 @@ export function ParticipantCard({
       </div>
 
       {swaps && swaps.length > 0 && (() => {
-        // Only the LAST entry's `to` voice actually produced an answer;
-        // intermediate `to` voices were attempted and themselves failed
-        // (which is what triggered the next swap). Showing "actually ran"
-        // on every row is wrong for chains of length > 1.
         const sorted = swaps.slice().sort((a, b) => a.fallbackIdx - b.fallbackIdx);
+        // Suppress the banner block entirely when the primary produced
+        // the displayed answer AND no swap target actually ran. This
+        // is the gemini bowerbird case (verdict_ambiguous false-
+        // positive → fallback fired → collision → chain exhausted)
+        // where the slot card was rendering DONE + content + three
+        // contradictory amber banners. The primary's content stands
+        // on its own; the failed-fallback breadcrumbs are noise.
+        const someSwapActuallyRan = sorted.some((s) => s.actuallyRan);
+        if (participant.hasAnswer && !someSwapActuallyRan) return null;
         return (
           <div className="space-y-1.5 border-b border-amber-500/30 bg-amber-500/5 px-4 py-2 text-[11px]">
             {sorted.map((s, i) => {
               const isCross = s.reason === "lineage_fallback";
-              const isLast = i === sorted.length - 1;
+              // `actuallyRan` is the truth-bearing signal — derived
+              // server-side from the slot's `_stats.json` lineage+
+              // model stamp matching this entry's `to` voice. The
+              // pre-fix `isLast` heuristic was wrong for collision-
+              // exhausted chains (where the last entry's TO voice
+              // never ran). Strikethrough + dim styling applies to
+              // any entry where the TO didn't run.
+              const ran = s.actuallyRan === true;
               return (
                 <div
                   key={`${s.fromLineage}-${s.fromModel}-${i}`}
@@ -230,14 +242,14 @@ export function ParticipantCard({
                       <ArrowRight className="h-3 w-3 shrink-0 text-amber-300" />
                       <span
                         className={
-                          isLast
+                          ran
                             ? "font-medium text-amber-100"
                             : "text-amber-100/60 line-through"
                         }
                       >
                         {s.toLineage}/{s.toModel}
                       </span>
-                      {isLast && (
+                      {ran && (
                         <span className="rounded bg-amber-500/15 px-1 py-0.5 font-mono text-[9px] text-amber-200">
                           actually ran
                         </span>
