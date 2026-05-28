@@ -1,6 +1,6 @@
 {
   "name": "chorus-codes",
-  "version": "0.8.59",
+  "version": "0.8.60",
   "description": "Driver-agnostic multi-LLM peer review for code decisions. Bring your own CLI; Chorus convenes 2-4 other LLMs to review the work before you ship.",
   "license": "Apache-2.0",
   "author": "99x Agency",
