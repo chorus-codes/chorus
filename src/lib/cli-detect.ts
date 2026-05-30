@@ -147,7 +147,14 @@ function fallbackPaths(cli: DetectableCli): string[] {
     dirs.push(path.join(HOME, '.opencode', 'bin'));
   }
   if (cli === 'kimi-cli') {
-    dirs.push(path.join(HOME, '.kimi', 'bin'));
+    // Two kimi builds, two installers: the Python kimi-cli
+    // (MoonshotAI/kimi-cli) drops into ~/.kimi/bin, while the native Kimi
+    // Code build (code.kimi.com) installs to ~/.kimi-code/bin. Probe both
+    // so a user who didn't add either to PATH is still detected (#98).
+    dirs.push(
+      path.join(HOME, '.kimi', 'bin'),
+      path.join(HOME, '.kimi-code', 'bin'),
+    );
   }
   if (cli === 'grok-cli') {
     // xAI's installer drops binaries here (curl|bash from x.ai/cli).
@@ -226,7 +233,13 @@ const CLI_SIGNATURES: Record<DetectableCli, RegExp> = {
   'gemini-cli': STARTS_WITH_VERSION,
   // Bare version output — "1.14.30" — same as gemini.
   'opencode-cli': STARTS_WITH_VERSION,
-  'kimi-cli': /\bkimi\b/i,
+  // Two kimi builds share the `kimi` binary name: the Python kimi-cli
+  // (MoonshotAI/kimi-cli) prints "kimi, version 1.46.0" (name token present),
+  // while the native Kimi Code build (code.kimi.com, ~/.kimi-code) prints a
+  // bare semver like "0.6.0" with NO name token. Accept either — the
+  // basename allowlist already gates on the binary being named `kimi`, so a
+  // bare-version match here is as safe as it is for gemini/opencode. (#98)
+  'kimi-cli': /\bkimi\b|^\s*v?\d+\.\d+/i,
   // xAI's grok CLI — actual --version output unverified at time of
   // writing (binary execution sandboxed off in this env). Accepting
   // either a "grok" name token OR a bare version string; basename

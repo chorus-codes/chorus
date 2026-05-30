@@ -28,17 +28,19 @@ beforeAll(() => {
 afterAll(() => {
   fs.rmSync(tmpDir, { recursive: true, force: true });
 });
-function stageBinary(name: string): string {
+function stageBinary(name: string, versionOutput = 'claude 0.0.0-test'): string {
   // Unique-suffix the directory so the same basename can be staged
   // multiple times across tests without colliding (e.g., claude + claude.cmd).
   // The stub must echo a string matching CLI_SIGNATURES[cli] — for
   // claude-code that's /\bclaude\b/i. verifyRunnable spawns the binary
   // with --version and pattern-matches the output, so an empty stub
   // would fail the signature gate even though the file exists.
+  // versionOutput is overridable so a CLI whose --version shape differs
+  // (e.g. native Kimi Code prints a bare semver) can be exercised too.
   const dir = path.join(tmpDir, randomUUID());
   fs.mkdirSync(dir, { recursive: true });
   const full = path.join(dir, name);
-  fs.writeFileSync(full, '#!/bin/sh\necho "claude 0.0.0-test"\n', { mode: 0o755 });
+  fs.writeFileSync(full, `#!/bin/sh\necho "${versionOutput}"\n`, { mode: 0o755 });
   return full;
 }
 
@@ -155,5 +157,34 @@ describe('validateCliPath — basename gate', () => {
     const result = validateCliPath('claude-code', path.join(tmpDir, 'missing', 'claude'));
     expect(result.found).toBe(false);
     expect(result.reason).toContain('no file at');
+  });
+});
+
+describe('kimi-cli signature — two builds share the `kimi` binary (issue #98)', () => {
+  it('accepts the Python kimi-cli --version output ("kimi, version 1.46.0")', () => {
+    // MoonshotAI/kimi-cli (pip/uv/npm) prints its name in the version line.
+    const staged = stageBinary('kimi', 'kimi, version 1.46.0');
+    const result = validateCliPath('kimi-cli', staged);
+    expect(result.found).toBe(true);
+    expect(result.reason).toBeUndefined();
+  });
+
+  it('accepts the native Kimi Code --version output (bare semver "0.6.0")', () => {
+    // Native Kimi Code (code.kimi.com → ~/.kimi-code/bin/kimi) prints a bare
+    // semver with NO name token. The basename gate already confirmed the
+    // binary is named `kimi`, so the signature must not reject it. This is
+    // the regression issue #98 reports.
+    const staged = stageBinary('kimi', '0.6.0');
+    const result = validateCliPath('kimi-cli', staged);
+    expect(result.found).toBe(true);
+    expect(result.reason).toBeUndefined();
+  });
+
+  it('still rejects a `kimi`-named binary whose --version is junk', () => {
+    // The basename gate alone isn't enough — a binary named kimi that prints
+    // something that's neither the name token nor a version is still bogus.
+    const staged = stageBinary('kimi', 'not a version at all');
+    const result = validateCliPath('kimi-cli', staged);
+    expect(result.found).toBe(false);
   });
 });

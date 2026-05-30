@@ -34,55 +34,78 @@ import { assertSandboxSupported, sandboxFailClosed } from './sandbox-guard.js';
 /**
  * Two ways to talk to Kimi K2.6:
  *
- *   - Standalone `kimi` CLI (paid Moonshot subscription) — Claude-Code-
- *     compatible, supports streaming text deltas. Requires the user to
- *     have wired `default_model` or a `[models]` block in
- *     `~/.kimi/config.toml`. Out-of-box config is empty → exits 1 with
- *     "LLM not set".
+ *   - Standalone `kimi` CLI — Claude-Code-compatible, supports streaming
+ *     text deltas via `--print --output-format stream-json`. Two builds
+ *     share this binary: native Kimi Code (code.kimi.com → `~/.kimi-code`,
+ *     account-authed via `kimi login`) and the legacy Python kimi-cli
+ *     (needs a `default_model`/`[models]` block in `~/.kimi/config.toml`;
+ *     an empty config exits 1 with "LLM not set").
  *
  *   - `opencode run --format json --model opencode-go/kimi-k2.6` (paid
  *     OpenCode Go subscription) — same model under the hood, routed
  *     through OpenCode. JSON-Lines output; one text event per LLM
  *     message. The fleet and openbridge journals use this path.
  *
- * Most users have ONE of the two paid plans, not both. Auto-detect at
- * shim init: if standalone kimi has a model configured, use it; else
- * fall back to opencode + opencode-go. Override via env
- * `CHORUS_KIMI_TRANSPORT=kimi-cli|opencode|auto` (default auto).
+ * `chooseKimiTransport` (below) holds the full precedence. In short: env
+ * override wins; a native `~/.kimi-code` install or a configured Python
+ * kimi-cli drives `kimi` directly; otherwise fall back to opencode-go.
+ * Override via env `CHORUS_KIMI_TRANSPORT=kimi-cli|opencode` (default auto).
  */
 type KimiTransport = 'kimi-cli' | 'opencode';
 
 let cachedTransport: KimiTransport | null = null;
 
-function detectKimiTransport(): KimiTransport {
-  if (cachedTransport) return cachedTransport;
+/**
+ * Pure transport decision — no module-level cache, takes the home dir and
+ * the raw env override as arguments so it's testable without touching the
+ * real `~`. `detectKimiTransport()` wraps it with the cache + real homedir.
+ *
+ * Precedence:
+ *   1. `CHORUS_KIMI_TRANSPORT` env override always wins.
+ *   2. Native Kimi Code (code.kimi.com → `~/.kimi-code`) → drive `kimi`
+ *      directly. It's account-authed via `kimi login` and has no
+ *      `~/.kimi/config.toml`, so the legacy config probe below would have
+ *      wrongly shunted it to opencode-go — ignoring the user's install or
+ *      failing outright when they lack an OpenCode Go subscription (#98).
+ *   3. Python kimi-cli with a wired model in `~/.kimi/config.toml` (empty
+ *      config exits 1 "LLM not set", so a populated one is the gate).
+ *   4. Otherwise fall back to opencode + opencode-go.
+ */
+export function chooseKimiTransport(
+  homeDir: string,
+  override?: string,
+): KimiTransport {
+  if (override === 'kimi-cli' || override === 'opencode') return override;
 
-  const override = process.env.CHORUS_KIMI_TRANSPORT;
-  if (override === 'kimi-cli' || override === 'opencode') {
-    cachedTransport = override;
-    return override;
-  }
+  // Native Kimi Code install — the active `kimi` on PATH (its installer
+  // renames any prior Python kimi-cli to `kimi-legacy`). Drive it directly.
+  if (fs.existsSync(path.join(homeDir, '.kimi-code'))) return 'kimi-cli';
 
-  // Probe the standalone kimi config — non-empty `default_model` OR any
-  // `[models.<name>]` table means the user has wired up a real model.
-  const configPath = path.join(os.homedir(), '.kimi', 'config.toml');
+  // Standalone Python kimi-cli — usable only when a model is wired:
+  // non-empty `default_model` OR any `[models.<name>]` table.
+  const configPath = path.join(homeDir, '.kimi', 'config.toml');
   if (fs.existsSync(configPath)) {
     try {
       const body = fs.readFileSync(configPath, 'utf-8');
       const defaultModel = body.match(/^\s*default_model\s*=\s*["']([^"']+)["']/m);
       const hasDefault = defaultModel != null && defaultModel[1].length > 0;
       const hasModelsTable = /^\[models\.[A-Za-z0-9_.-]+\]/m.test(body);
-      if (hasDefault || hasModelsTable) {
-        cachedTransport = 'kimi-cli';
-        return 'kimi-cli';
-      }
+      if (hasDefault || hasModelsTable) return 'kimi-cli';
     } catch {
       /* fall through */
     }
   }
 
-  cachedTransport = 'opencode';
   return 'opencode';
+}
+
+function detectKimiTransport(): KimiTransport {
+  if (cachedTransport) return cachedTransport;
+  cachedTransport = chooseKimiTransport(
+    os.homedir(),
+    process.env.CHORUS_KIMI_TRANSPORT,
+  );
+  return cachedTransport;
 }
 
 /**
