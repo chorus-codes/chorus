@@ -28,6 +28,7 @@ import { quoteValue, quotePath, validateValue } from './quote.js';
 import { spawnHeadless } from '../headless.js';
 import { parseOpencode, parseOpencodeExit, parseKimi } from './parsers/index.js';
 import { atomicWriteJsonSync } from '../../lib/atomic-write.js';
+import { detectAllClis } from '../../lib/cli-detect.js';
 import { wrapWithPty } from './opencode.js';
 import { assertSandboxSupported, sandboxFailClosed } from './sandbox-guard.js';
 
@@ -55,18 +56,71 @@ type KimiTransport = 'kimi-cli' | 'opencode';
 
 let cachedTransport: KimiTransport | null = null;
 
+/** True when `child` resolves to a location strictly inside `parent`.
+ *  Lexical only (no fs) and prefix-false-match safe — `~/.kimi-code-backup`
+ *  is NOT under `~/.kimi-code`. Callers that care about symlinks resolve
+ *  BOTH paths before calling (see `isNativeKimiBinary`). The `..` guard
+ *  matches a real parent ref (`..` or `../…`) but NOT a child segment that
+ *  merely starts with dots (e.g. `..helpers/bin`). */
+export function isPathUnder(child: string, parent: string): boolean {
+  const rel = path.relative(parent, child);
+  return (
+    rel.length > 0 &&
+    rel !== '..' &&
+    !rel.startsWith(`..${path.sep}`) &&
+    !path.isAbsolute(rel)
+  );
+}
+
+/** Best-effort realpath: resolves symlinks when the path exists, else
+ *  degrades to lexical normalisation. Never throws. */
+function realpathOrLexical(p: string): string {
+  try {
+    return fs.realpathSync(p);
+  } catch {
+    return path.resolve(p);
+  }
+}
+
 /**
- * Pure transport decision — no module-level cache, takes the home dir and
- * the raw env override as arguments so it's testable without touching the
- * real `~`. `detectKimiTransport()` wraps it with the cache + real homedir.
+ * Is the `kimi` binary at `binPath` the native Kimi Code build (installed
+ * under `<homeDir>/.kimi-code`)? Returns `undefined` when `binPath` is
+ * unknown so the caller can fall back to a directory-existence heuristic.
+ *
+ * Realpaths BOTH the binary and the `~/.kimi-code` dir before comparing, so
+ * the check is correct whether the symlink is on the binary (e.g.
+ * `/usr/local/bin/kimi` → `~/.kimi-code/bin/kimi`) OR on the directory
+ * itself (`~/.kimi-code` → `/opt/kimi-code`). Resolving only one side would
+ * put the two paths in different namespaces and false-negative.
+ */
+export function isNativeKimiBinary(
+  homeDir: string,
+  binPath?: string,
+): boolean | undefined {
+  if (!binPath) return undefined;
+  return isPathUnder(
+    realpathOrLexical(binPath),
+    realpathOrLexical(path.join(homeDir, '.kimi-code')),
+  );
+}
+
+/**
+ * Pure transport decision — no module-level cache, no fs beyond the legacy
+ * config probe, so it's testable without touching the real `~`.
+ * `detectKimiTransport()` wraps it with the cache, real homedir, and the
+ * native-build verdict from `isNativeKimiBinary`.
  *
  * Precedence:
  *   1. `CHORUS_KIMI_TRANSPORT` env override always wins.
- *   2. Native Kimi Code (code.kimi.com → `~/.kimi-code`) → drive `kimi`
- *      directly. It's account-authed via `kimi login` and has no
- *      `~/.kimi/config.toml`, so the legacy config probe below would have
- *      wrongly shunted it to opencode-go — ignoring the user's install or
- *      failing outright when they lack an OpenCode Go subscription (#98).
+ *   2. The resolved `kimi` binary is the native Kimi Code build
+ *      (`isNativeBuild === true`) → drive it directly. It's account-authed
+ *      via `kimi login` and has no `~/.kimi/config.toml`, so the legacy
+ *      config probe below would otherwise shunt it to opencode-go —
+ *      ignoring the install or failing without an OpenCode Go sub (#98).
+ *      Keying on the RESOLVED binary (not just the dir's existence) stops a
+ *      stale `~/.kimi-code` from forcing the direct path when PATH actually
+ *      resolves `kimi` to an unconfigured Python build (→ "LLM not set").
+ *      When the build is unknown (`undefined`), fall back to dir existence.
  *   3. Python kimi-cli with a wired model in `~/.kimi/config.toml` (empty
  *      config exits 1 "LLM not set", so a populated one is the gate).
  *   4. Otherwise fall back to opencode + opencode-go.
@@ -74,12 +128,19 @@ let cachedTransport: KimiTransport | null = null;
 export function chooseKimiTransport(
   homeDir: string,
   override?: string,
+  isNativeBuild?: boolean,
 ): KimiTransport {
   if (override === 'kimi-cli' || override === 'opencode') return override;
 
-  // Native Kimi Code install — the active `kimi` on PATH (its installer
-  // renames any prior Python kimi-cli to `kimi-legacy`). Drive it directly.
-  if (fs.existsSync(path.join(homeDir, '.kimi-code'))) return 'kimi-cli';
+  // Native Kimi Code build — drive `kimi` directly. When the build is
+  // unknown (no resolved binary), fall back to dir existence so behaviour
+  // is no worse than not knowing. An explicit `false` (resolved to a
+  // non-native binary) deliberately skips this and falls to the config
+  // probe — that's the dual-install bug fix.
+  if (isNativeBuild === true) return 'kimi-cli';
+  if (isNativeBuild === undefined && fs.existsSync(path.join(homeDir, '.kimi-code'))) {
+    return 'kimi-cli';
+  }
 
   // Standalone Python kimi-cli — usable only when a model is wired:
   // non-empty `default_model` OR any `[models.<name>]` table.
@@ -101,9 +162,17 @@ export function chooseKimiTransport(
 
 function detectKimiTransport(): KimiTransport {
   if (cachedTransport) return cachedTransport;
+  // chorus's canonical "where is kimi" answer (PATH lookup first, then the
+  // fallback-dir scan) — the same binary `runHeadless` resolves by bare name.
+  // Deciding on which build actually runs (rather than on a possibly-stale
+  // ~/.kimi-code directory) is what fixes the dual-install case. Cached
+  // (detectAllClis has a 30s TTL; cachedTransport caches the verdict here).
+  const home = os.homedir();
+  const detected = detectAllClis().find((c) => c.id === 'kimi-cli')?.path;
   cachedTransport = chooseKimiTransport(
-    os.homedir(),
+    home,
     process.env.CHORUS_KIMI_TRANSPORT,
+    isNativeKimiBinary(home, detected),
   );
   return cachedTransport;
 }
