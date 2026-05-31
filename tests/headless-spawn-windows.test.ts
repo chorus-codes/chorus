@@ -54,6 +54,23 @@ function stubCliPaths(): void {
   }));
 }
 
+/**
+ * #104: resolveBinaryPath now first asks cli-detect for the absolute path it
+ * resolved (so the daemon spawns exactly the detected binary). Stub it so
+ * these tests stay deterministic and don't load the heavy real cli-detect
+ * module under a flipped process.platform.
+ *
+ * Default `resolve` is identity — modelling "detection has no path for this
+ * CLI" so the EXISTING bare-name / Windows-`where` resolution below is what's
+ * under test. Pass a custom `resolve` to model "detection resolved an absolute
+ * path" (the #104 happy path).
+ */
+function stubCliDetect(resolve: (command: string) => string = (c) => c): void {
+  vi.doMock('../src/lib/cli-detect', () => ({
+    resolveCliBinaryPath: resolve,
+  }));
+}
+
 function setPlatform(p: NodeJS.Platform): void {
   Object.defineProperty(process, 'platform', {
     value: p,
@@ -134,6 +151,7 @@ describe('resolveBinaryPath (via spawnHeadless) — Unix branch', () => {
   it('passes the command through unchanged on Linux and never calls `where`', async () => {
     setPlatform('linux');
     stubCliPaths();
+    stubCliDetect();
 
     const spawnSyncSpy = vi.fn();
     const { child, triggerExit } = makeFakeChild();
@@ -171,6 +189,7 @@ describe('resolveBinaryPath (via spawnHeadless) — Windows branch', () => {
   it('prefers the .cmd shim when `where` returns both bash sibling and .cmd', async () => {
     setPlatform('win32');
     stubCliPaths();
+    stubCliDetect();
 
     const spawnSyncSpy = vi.fn().mockReturnValue({
       status: 0,
@@ -217,6 +236,7 @@ describe('resolveBinaryPath (via spawnHeadless) — Windows branch', () => {
   it('caches the resolution: a second spawn for the same command does not re-invoke `where`', async () => {
     setPlatform('win32');
     stubCliPaths();
+    stubCliDetect();
 
     const spawnSyncSpy = vi.fn().mockReturnValue({
       status: 0,
@@ -268,6 +288,7 @@ describe('resolveBinaryPath (via spawnHeadless) — Windows branch', () => {
   it('falls back to the original command name when `where` exits non-zero', async () => {
     setPlatform('win32');
     stubCliPaths();
+    stubCliDetect();
 
     const spawnSyncSpy = vi.fn().mockReturnValue({
       status: 1,
@@ -306,6 +327,7 @@ describe('resolveBinaryPath (via spawnHeadless) — Windows branch', () => {
   it('falls back to the original command when `where` reports success but stdout is empty', async () => {
     setPlatform('win32');
     stubCliPaths();
+    stubCliDetect();
 
     const spawnSyncSpy = vi.fn().mockReturnValue({
       status: 0,
@@ -344,6 +366,7 @@ describe('resolveBinaryPath (via spawnHeadless) — Windows branch', () => {
   it('preserves an absolute command path without invoking `where`', async () => {
     setPlatform('win32');
     stubCliPaths();
+    stubCliDetect();
 
     const spawnSyncSpy = vi.fn();
     const { child, triggerExit } = makeFakeChild();
@@ -382,6 +405,7 @@ describe('spawnHeadless shell:true gating', () => {
   it('does NOT set shell:true on darwin', async () => {
     setPlatform('darwin');
     stubCliPaths();
+    stubCliDetect();
 
     const spawnSyncSpy = vi.fn();
     const { child, triggerExit } = makeFakeChild();
@@ -410,5 +434,107 @@ describe('spawnHeadless shell:true gating', () => {
     const opts = spawnSpy.mock.calls[0]?.[2] as { shell?: boolean };
     expect(opts.shell).toBe(false);
     expect(spawnSyncSpy).not.toHaveBeenCalled();
+  });
+});
+
+describe('resolveBinaryPath — #104: spawn the detection-resolved absolute path', () => {
+  it('spawns the absolute path detection resolved on Linux (not the bare name)', async () => {
+    setPlatform('linux');
+    stubCliPaths();
+    // Detection resolved `kimi` to a fallback-dir install not on PATH — the
+    // ENOENT case bare-name spawn could never have launched.
+    const resolved = '/home/u/.kimi-code/bin/kimi';
+    stubCliDetect((c) => (c === 'kimi' ? resolved : c));
+
+    const spawnSyncSpy = vi.fn();
+    const { child, triggerExit } = makeFakeChild();
+    const spawnSpy = vi.fn((_cmd: string, _args: string[], _opts?: object) => child);
+
+    vi.doMock('node:child_process', () => ({ spawn: spawnSpy, spawnSync: spawnSyncSpy }));
+    vi.doMock('child_process', () => ({ spawn: spawnSpy, spawnSync: spawnSyncSpy }));
+
+    const { spawnHeadless } = await import('../src/daemon/headless');
+    const run = spawnHeadless({
+      command: 'kimi',
+      args: ['--print'],
+      cwd: process.cwd(),
+      parseLine: () => [],
+      cli: 'kimi',
+    });
+    triggerExit(0);
+    await run.done;
+
+    expect(spawnSpy.mock.calls[0]?.[0]).toBe(resolved); // not 'kimi'
+    expect(spawnSyncSpy).not.toHaveBeenCalled(); // no `where` on Unix
+    const opts = spawnSpy.mock.calls[0]?.[2] as { shell?: boolean };
+    expect(opts.shell).toBe(false);
+  });
+
+  it('spawns the detection-resolved absolute path on Windows and skips `where`', async () => {
+    setPlatform('win32');
+    stubCliPaths();
+    // An absolute path short-circuits the `where` lookup entirely — detection
+    // already did the resolution, so no second, possibly-divergent resolve.
+    const resolved = 'C:\\Users\\u\\.kimi-code\\bin\\kimi.cmd';
+    stubCliDetect((c) => (c === 'kimi' ? resolved : c));
+
+    const spawnSyncSpy = vi.fn();
+    const { child, triggerExit } = makeFakeChild();
+    const spawnSpy = vi.fn((_cmd: string, _args: string[], _opts?: object) => child);
+
+    vi.doMock('node:child_process', () => ({ spawn: spawnSpy, spawnSync: spawnSyncSpy }));
+    vi.doMock('child_process', () => ({ spawn: spawnSpy, spawnSync: spawnSyncSpy }));
+
+    const { spawnHeadless } = await import('../src/daemon/headless');
+    const run = spawnHeadless({
+      command: 'kimi',
+      args: [],
+      cwd: process.cwd(),
+      parseLine: () => [],
+      cli: 'kimi',
+    });
+    triggerExit(0);
+    await run.done;
+
+    expect(spawnSyncSpy).not.toHaveBeenCalled(); // detection won; no `where`
+    expect(spawnSpy.mock.calls[0]?.[0]).toBe(resolved);
+    const opts = spawnSpy.mock.calls[0]?.[2] as { shell?: boolean };
+    expect(opts.shell).toBe(true); // still shell:true on Windows
+  });
+
+  it('falls back to bare-name `where` resolution when detection has no path (Windows)', async () => {
+    setPlatform('win32');
+    stubCliPaths();
+    stubCliDetect(); // identity → detection found nothing for this CLI
+
+    const spawnSyncSpy = vi.fn().mockReturnValue({
+      status: 0,
+      stdout: 'C:\\path\\grok.cmd\r\n',
+      stderr: '',
+      pid: 0,
+      output: [],
+      signal: null,
+    });
+    const { child, triggerExit } = makeFakeChild();
+    const spawnSpy = vi.fn((_cmd: string, _args: string[], _opts?: object) => child);
+
+    vi.doMock('node:child_process', () => ({ spawn: spawnSpy, spawnSync: spawnSyncSpy }));
+    vi.doMock('child_process', () => ({ spawn: spawnSpy, spawnSync: spawnSyncSpy }));
+
+    const { spawnHeadless } = await import('../src/daemon/headless');
+    const run = spawnHeadless({
+      command: 'grok',
+      args: [],
+      cwd: process.cwd(),
+      parseLine: () => [],
+      cli: 'grok',
+    });
+    triggerExit(0);
+    await run.done;
+
+    // Detection had nothing → the existing `where grok` path still runs.
+    expect(spawnSyncSpy).toHaveBeenCalledTimes(1);
+    expect(spawnSyncSpy.mock.calls[0]?.[1]).toEqual(['grok']);
+    expect((spawnSpy.mock.calls[0]?.[0] as string).toLowerCase()).toMatch(/grok\.cmd$/);
   });
 });

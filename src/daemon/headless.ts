@@ -28,38 +28,51 @@ import * as os from 'os';
 import * as path from 'path';
 import type { AgentEvent } from './agents/types.js';
 import { cliPaths } from '../lib/cli-paths.js';
+import { resolveCliBinaryPath } from '../lib/cli-detect.js';
 
 // Cache binary→path resolutions. `where` shells out — don't repeat per spawn.
 const binaryPathCache = new Map<string, string>();
 
 /**
- * Resolve a binary name to a full path with extension. Critical on Windows
- * where Node's spawn won't resolve `.cmd` shims (npm globals like
- * claude.cmd, codex.cmd, gemini.cmd) without shell:true (DEP0190 in
- * Node 22+). On Unix returns the name unchanged — spawn handles PATH
- * resolution natively for ELF/script files with shebangs.
+ * Resolve a binary name to a full path with extension. Two stages:
+ *
+ *   1. #104 — prefer the absolute path detection already resolved AND verified
+ *      for this CLI, so the daemon spawns exactly the binary detection chose.
+ *      This closes two gaps between detection and execution: ENOENT (a CLI
+ *      found only via the fallback-dir scan whose dir isn't on the spawn PATH)
+ *      and shadowing (two same-named binaries, e.g. ~/.kimi/bin/kimi vs
+ *      ~/.kimi-code/bin/kimi, where bare-name spawn could pick the other one).
+ *      When detection has no path, `resolveCliBinaryPath` returns the bare name
+ *      unchanged and the existing resolution below applies — no behaviour
+ *      change for the unresolved case.
+ *   2. Windows `where` fallback — critical where Node's spawn won't resolve
+ *      `.cmd` shims (npm globals like claude.cmd) without shell:true (DEP0190
+ *      in Node 22+). Skipped once stage 1 yields an absolute path. On Unix a
+ *      bare name is passed through — spawn handles PATH resolution natively
+ *      for ELF/script files with shebangs.
  */
 function resolveBinaryPath(command: string): string {
-  if (process.platform !== 'win32') return command;
+  const detected = resolveCliBinaryPath(command);
+  if (process.platform !== 'win32') return detected;
   // Use the Windows-specific isAbsolute (`path.win32`) so absolute
   // detection works the same on a real Windows host AND on a Linux CI
   // run where the test stubs `process.platform = 'win32'` but the
   // top-level `path` module is still POSIX.
-  if (path.win32.isAbsolute(command)) return command;
-  const cached = binaryPathCache.get(command);
+  if (path.win32.isAbsolute(detected)) return detected;
+  const cached = binaryPathCache.get(detected);
   if (cached) return cached;
-  const r = spawnSync('where', [command], { encoding: 'utf-8', timeout: 3000 });
+  const r = spawnSync('where', [detected], { encoding: 'utf-8', timeout: 3000 });
   if (r.status !== 0 || !r.stdout) {
-    binaryPathCache.set(command, command);
-    return command; // fallback — daemon will surface ENOENT cleanly.
+    binaryPathCache.set(detected, detected);
+    return detected; // fallback — daemon will surface ENOENT cleanly.
   }
   // npm globals on Windows ship two siblings: `claude` (Bash shim, not
   // executable by Node spawn) and `claude.cmd` (Windows shim). `where`
   // returns both; we must pick the .cmd/.bat/.exe variant for Node.
   const lines = r.stdout.split(/\r?\n/).map((s) => s.trim()).filter(Boolean);
   const preferred = lines.find((l) => /\.(cmd|bat|exe)$/i.test(l));
-  const resolved = preferred ?? lines[0] ?? command;
-  binaryPathCache.set(command, resolved);
+  const resolved = preferred ?? lines[0] ?? detected;
+  binaryPathCache.set(detected, resolved);
   return resolved;
 }
 

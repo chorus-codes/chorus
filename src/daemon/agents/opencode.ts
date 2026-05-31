@@ -14,6 +14,7 @@ import type {
 } from './types.js';
 import { quotePath, validateValue } from './quote.js';
 import { spawnHeadless } from '../headless.js';
+import { resolveCliBinaryPath } from '../../lib/cli-detect.js';
 import { parseOpencode, parseOpencodeExit } from './parsers/index.js';
 import { assertSandboxSupported, sandboxFailClosed } from './sandbox-guard.js';
 import * as fs from 'fs';
@@ -197,7 +198,10 @@ export const opencodeShim: AgentShim = {
     // forwards the child exit code so cli_failed detection still works.
     // Header/footer are absent under -q, so parseOpencode (which already
     // tryJson's every line and discards non-JSON) needs no change.
-    const { command, args } = wrapWithPty('opencode', opencodeArgs);
+    // #104: resolve opencode to its detected absolute path HERE. The PTY
+    // wrapper embeds the binary inside argv (Linux: `script -qfec '<bin>…'`),
+    // so the spawn core only ever sees `script` and can't resolve it for us.
+    const { command, args } = wrapWithPty(resolveCliBinaryPath('opencode'), opencodeArgs);
 
     const run = spawnHeadless({
       command,
