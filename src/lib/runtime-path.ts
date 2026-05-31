@@ -59,6 +59,12 @@ const KNOWN_INSTALL_DIRS = [
   '~/.codex/bin',
   '~/.gemini/bin',
   '~/.kimi/bin',
+  // Native Kimi Code (code.kimi.com) installs here, grok (xAI) here. Both
+  // are probed by detection's fallbackPaths, so they must also reach the
+  // spawn PATH or a fallback-detected binary ENOENTs on bare-name spawn.
+  // Keep in sync with the per-CLI dirs in cli-detect.ts:fallbackPaths (#98).
+  '~/.kimi-code/bin',
+  '~/.grok/bin',
   '~/.claude/local',
   '~/.bun/bin',
   '~/.deno/bin',
