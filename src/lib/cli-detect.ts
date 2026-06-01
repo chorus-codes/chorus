@@ -448,6 +448,54 @@ export function clearDetectionCache(): void {
 }
 
 /**
+ * Reverse of BINARY_NAME: bare binary name → DetectableCli id. BINARY_NAME's
+ * values are unique, so the inversion is lossless. Lets a spawn site that only
+ * knows the bare command (e.g. `kimi`) recover the detection id without
+ * threading it through every shim.
+ */
+const CLI_ID_BY_BINARY: Record<string, DetectableCli> = Object.fromEntries(
+  (Object.entries(BINARY_NAME) as [DetectableCli, string][]).map(
+    ([id, bin]) => [bin, id],
+  ),
+) as Record<string, DetectableCli>;
+
+/**
+ * Resolve a bare CLI binary name to the absolute path detection already
+ * verified for it, so the daemon spawns the SAME binary it detected (#104).
+ *
+ * Detection resolves a concrete path (PATH lookup → fallback-dir scan → manual
+ * override); spawning by bare name re-resolves against the daemon's PATH and
+ * can disagree two ways:
+ *   - ENOENT — a CLI found only via the fallback-dir scan (its install dir is
+ *     not on the spawn PATH) can't be launched by bare name at all.
+ *   - shadowing — when two same-named binaries coexist (e.g. ~/.kimi/bin/kimi
+ *     and ~/.kimi-code/bin/kimi), bare-name spawn may run a different build
+ *     than detection resolved, so the transport decision (#101) and the binary
+ *     that actually runs end up describing different binaries.
+ *
+ * Returns `command` UNCHANGED when:
+ *   - it already carries a path separator (the caller passed a concrete path —
+ *     e.g. a manual override, or the `script` PTY wrapper's resolved target);
+ *   - it isn't one of our known CLI binaries (e.g. `script`, `sh`);
+ *   - detection currently can't find that CLI — falling through to the
+ *     caller's existing bare-name resolution (Unix PATH / Windows `where`),
+ *     preserving pre-#104 behaviour.
+ *
+ * Reads the cached detection result (30s TTL) — the steady-state cost is a map
+ * lookup; a cold cache pays one detect sweep, the same one the kimi transport
+ * probe already triggers.
+ */
+export function resolveCliBinaryPath(command: string): string {
+  // Only ever rewrite a bare name. Anything with a separator is a concrete
+  // path the caller has already committed to.
+  if (command.includes('/') || command.includes('\\')) return command;
+  const id = CLI_ID_BY_BINARY[command];
+  if (!id) return command;
+  const hit = detectAllClis().find((c) => c.id === id && c.found && c.path);
+  return hit?.path ?? command;
+}
+
+/**
  * Validate a user-supplied path for a given CLI. Used by the
  * "Set path manually" fallback when auto-detect misses.
  *

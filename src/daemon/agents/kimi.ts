@@ -28,7 +28,7 @@ import { quoteValue, quotePath, validateValue } from './quote.js';
 import { spawnHeadless } from '../headless.js';
 import { parseOpencode, parseOpencodeExit, parseKimi } from './parsers/index.js';
 import { atomicWriteJsonSync } from '../../lib/atomic-write.js';
-import { detectAllClis } from '../../lib/cli-detect.js';
+import { detectAllClis, resolveCliBinaryPath } from '../../lib/cli-detect.js';
 import { wrapWithPty } from './opencode.js';
 import { assertSandboxSupported, sandboxFailClosed } from './sandbox-guard.js';
 
@@ -312,7 +312,10 @@ export const kimiShim: AgentShim = {
     // failure mode the opencode PTY fix was written to prevent. Confirmed
     // launch-eve by both deepseek and gemini reviewing the shims; the bug
     // was a copy-paste oversight when the PTY fix landed in opencode.ts.
-    const { command, args } = wrapWithPty('opencode', opencodeArgs);
+    // #104: resolve opencode to its detected absolute path before PTY-wrapping
+    // — the wrapper embeds the binary in argv, so the spawn core only sees
+    // `script` and can't resolve it. (Same rationale as opencodeShim.)
+    const { command, args } = wrapWithPty(resolveCliBinaryPath('opencode'), opencodeArgs);
     const run = spawnHeadless({
       command,
       args,
