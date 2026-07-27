@@ -76,6 +76,10 @@ export function findPidsOnPort(port: number): number[] {
         encoding: 'utf-8',
         stdio: ['ignore', 'pipe', 'ignore'],
         timeout: 3000,
+        // #107 — execSync always goes through a shell, so on Windows this is
+        // a cmd.exe child with its own console. Neither `ss` nor `lsof` exists
+        // there, but the window still flashes before the command fails.
+        windowsHide: true,
       });
       const pids = parse(out);
       if (pids.length > 0) return Array.from(new Set(pids));

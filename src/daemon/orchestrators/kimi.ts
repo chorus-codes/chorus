@@ -68,6 +68,7 @@ async function connectKimi(
       await execFileAsync('kimi', ['mcp', 'remove', 'chorus'], {
         timeout: 30_000,
         shell: process.platform === 'win32',
+        windowsHide: true, // #107 — shell:true spawns a visible cmd.exe otherwise
       });
     } catch {
       /* best-effort */
@@ -94,6 +95,7 @@ async function connectKimi(
       {
         timeout: 30_000,
         shell: process.platform === 'win32',
+        windowsHide: true, // #107 — shell:true spawns a visible cmd.exe otherwise
       },
     );
   } catch (err) {

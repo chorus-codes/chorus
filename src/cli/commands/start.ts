@@ -434,6 +434,7 @@ async function spawnCockpitForExistingDaemon(
       cwd: packageRoot,
       detached: true,
       stdio: ['ignore', webLogFd, webLogFd],
+      windowsHide: true, // #107 — background process, output goes to web.log
       env: {
         ...process.env,
         CHORUS_DAEMON_URL: `http://127.0.0.1:${live.daemonPort}`,
@@ -661,6 +662,7 @@ async function spawnDaemonAndCockpit(
   const child = spawn('node', spawnArgs, {
     detached: true,
     stdio: ['ignore', daemonLogFd, daemonLogFd],
+    windowsHide: true, // #107 — background process, output goes to daemon.log
     env: {
       ...process.env,
       CHORUS_DAEMON_PORT: String(ports.daemonPort),
@@ -710,6 +712,7 @@ async function spawnDaemonAndCockpit(
         cwd: packageRoot,
         detached: true,
         stdio: ['ignore', webLogFd, webLogFd],
+        windowsHide: true, // #107 — background process, output goes to web.log
         env: {
           ...process.env,
           // Tell the cockpit's server-side proxy where the daemon is.

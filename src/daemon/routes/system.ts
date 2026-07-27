@@ -291,7 +291,11 @@ export function registerSystemRoutes(
       const { execFile } = await import('node:child_process');
       const { promisify } = await import('node:util');
       const run = promisify(execFile);
-      const { stdout } = await run(opencode.path, ['models'], { timeout: 10_000, shell: process.platform === 'win32' });
+      const { stdout } = await run(opencode.path, ['models'], {
+        timeout: 10_000,
+        shell: process.platform === 'win32',
+        windowsHide: true, // #107 — shell:true spawns a visible cmd.exe otherwise
+      });
       const flat = stdout
         .split('\n')
         .map((l) => l.trim())

@@ -61,7 +61,11 @@ function resolveBinaryPath(command: string): string {
   if (path.win32.isAbsolute(detected)) return detected;
   const cached = binaryPathCache.get(detected);
   if (cached) return cached;
-  const r = spawnSync('where', [detected], { encoding: 'utf-8', timeout: 3000 });
+  const r = spawnSync('where', [detected], {
+    encoding: 'utf-8',
+    timeout: 3000,
+    windowsHide: true, // #107 — `where` is a console app; don't flash a window
+  });
   if (r.status !== 0 || !r.stdout) {
     binaryPathCache.set(detected, detected);
     return detected; // fallback — daemon will surface ENOENT cleanly.
@@ -371,6 +375,12 @@ export function spawnHeadless(opts: SpawnHeadlessOptions): HeadlessRun {
     env: spawnEnv(opts.env),
     stdio: ['pipe', 'pipe', 'pipe'],
     shell: isWindows,
+    // Windows-only: `shell: true` routes through cmd.exe, and every cmd.exe
+    // child gets its own VISIBLE console window unless suppressed. With a
+    // multi-voice template that's one flashing window per reviewer per round,
+    // stealing focus from whatever the user is doing. stdio is fully piped —
+    // nothing is ever rendered in that console. (#107)
+    windowsHide: true,
     // Unix-only: spawn the child as its own process group leader so we
     // can send SIGTERM/SIGKILL to the WHOLE group via `process.kill(-pid)`.
     // Without this, killing only the head process (`child.kill()`) leaves

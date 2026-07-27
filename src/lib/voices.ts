@@ -131,6 +131,7 @@ async function probeCodexModelsLive(): Promise<string[] | null> {
     const { stdout } = await run('codex', ['debug', 'models'], {
       timeout: 5_000,
       shell: process.platform === 'win32',
+      windowsHide: true, // #107 — shell:true spawns a visible cmd.exe otherwise
     });
     const parsed = JSON.parse(stdout) as unknown;
     if (
@@ -417,6 +418,7 @@ export async function seedOpencodeVoicesAsync(): Promise<{
     const { stdout } = await run('opencode', ['models'], {
       timeout: 10_000,
       shell: process.platform === 'win32',
+      windowsHide: true, // #107 — shell:true spawns a visible cmd.exe otherwise
     });
     modelList = stdout
       .split('\n')
