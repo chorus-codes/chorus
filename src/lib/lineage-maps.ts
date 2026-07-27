@@ -147,7 +147,7 @@ export function uiLineageDot(lineage: string | undefined): string {
  * the YAML omits it.
  */
 export const UI_LINEAGE_DEFAULT_MODEL: Record<UILineage, string> = {
-  claude: "claude-opus-4-7",
+  claude: "claude-opus-5",
   codex: "gpt-5.5",
   gemini: "gemini-2.5-pro",
   opencode: "kimi-k2.6",
@@ -161,10 +161,16 @@ export const UI_LINEAGE_DEFAULT_MODEL: Record<UILineage, string> = {
   // Grok Build has one model today (grok-build). xAI ships single-binary
   // versioned models, so this stays stable across CLI bumps.
   grok: "grok-build",
-  // Antigravity CLI is locked to Gemini 3.5 Flash (High) by Google — no
-  // --model flag on `agy`. The chorus-side label is informational; the
-  // CLI picks the model at runtime.
-  antigravity: "gemini-3.5-flash",
+  // Informational only — the antigravity shim doesn't pass a model. The
+  // id matches what `agy models` actually lists for the build the shim
+  // documents (bare "gemini-3.5-flash" is not a valid id there; every
+  // entry carries a -high/-medium/-low reasoning suffix).
+  // NOTE: agy 1.1.7 HAS grown `--model` plus an `agy models` subcommand
+  // listing 11 models — including non-Google ones (claude-sonnet-4-6,
+  // gpt-oss-120b-medium). Wiring selection through the shim is a
+  // follow-up; it also needs lineage rethink, since an agy voice running
+  // a Claude model is not a google-family reviewer for quorum purposes.
+  antigravity: "gemini-3.5-flash-high",
 };
 
 /**
@@ -186,19 +192,31 @@ export const UI_LINEAGE_DEFAULT_MODEL: Record<UILineage, string> = {
  * orchestrators with no model selection of their own.
  */
 export const UI_LINEAGE_AVAILABLE_MODELS: Partial<Record<UILineage, string[]>> = {
+  // Claude list re-probed 2026-07-27 with `claude --model <X> -p "say ok"`
+  // against an authed Claude Code 2.1.220: opus-5, sonnet-5, opus-4-7,
+  // sonnet-4-6 and haiku-4-5 all answered. The 4-5-era entries are kept
+  // (removing a model deletes its voice row, breaking any template pinned
+  // to it) — they're simply no longer near the top.
+  // claude-fable-5 is deliberately ABSENT: it exists, but answers with
+  // "Fable 5 requires usage credits", which breaks the $0-out-of-pocket
+  // promise the subscription transports are here to keep.
   claude: [
+    "claude-opus-5",
+    "claude-sonnet-5",
     "claude-opus-4-7",
     "claude-sonnet-4-6",
-    "claude-sonnet-4-5",
     "claude-haiku-4-5",
+    "claude-sonnet-4-5",
     "claude-opus-4-5",
   ],
+  // Static fallback only — when codex-cli is installed, `codex debug
+  // models` wins (see voices.ts). Trimmed 2026-07-27 to the slugs that
+  // probe still returns as `visibility: list`: gpt-5.4, gpt-5.3-codex and
+  // gpt-5.2 have aged out of the account catalog, so offering them just
+  // seeds rows the live probe deletes on the next boot.
   codex: [
     "gpt-5.5",
-    "gpt-5.4",
     "gpt-5.4-mini",
-    "gpt-5.3-codex",
-    "gpt-5.2",
   ],
   // Gemini list verified 2026-05-04 by `gemini -p "ok" --model <X>`.
   // gemini-2.5-pro is the universally-available default — gemini-3.1-pro-preview
@@ -206,31 +224,37 @@ export const UI_LINEAGE_AVAILABLE_MODELS: Partial<Record<UILineage, string[]>> =
   // failure mode that surfaced as "Reviewer · GEMINI failed → cross-lineage
   // fallback" in dogfood). 2.5-pro works on every gemini-cli account we've
   // tested. Users with preview access can switch via the model dropdown.
+  // WARNING (re-probed 2026-07-27, gemini-cli 0.52.0 = current latest):
+  // Google now rejects the free individual tier outright —
+  // "IneligibleTierError: This client is no longer supported for Gemini
+  // Code Assist for individuals … migrate to the Antigravity suite"
+  // (reasonCode UNSUPPORTED_CLIENT). That's an ACCESS failure, not a
+  // model-name failure, so the list below is unchanged: it still holds
+  // for API-key and paid-tier accounts. Free-tier users need `agy`
+  // (antigravity) instead — same models, supported client.
   gemini: [
     "gemini-2.5-pro",
     "gemini-3.1-pro-preview",
     "gemini-2.5-flash",
   ],
-  // Kimi list cross-checked against the official kimi-cli docs +
-  // source (2026-05-04):
-  //   - CHANGELOG.md: kimi-k2.6, kimi-k2-thinking
-  //   - klips/klip-6: kimi-k2-thinking-turbo (recommended turbo flagship)
-  //   - sdks/kimi-sdk/README.md, klips/klip-7: kimi-k2-turbo-preview
-  //   - Welcome screen dropped hardcoded kimi-k2.5, but it still works
-  // Not end-to-end probed because the dedicated kimi CLI needs a
-  // separate Moonshot account login; cross-referenced from official docs
-  // is the next-best signal.
-  // Index 0 must match UI_LINEAGE_DEFAULT_MODEL.kimi to keep the seed's
-  // immutable provider row pointed at the same default. kimi-k2.6 has
-  // been the chorus default since v0.7; not auto-rotating to the
-  // turbo-thinking variant here so existing installs don't silently
-  // change behavior. Users can still toggle the turbo entries on.
+  // Rebuilt 2026-07-27 from what the two moonshot transports actually
+  // accept. The previous list was Moonshot *API* ids (kimi-k2-thinking,
+  // kimi-k2-turbo-preview, …) which neither transport takes:
+  //   - opencode-go: `opencode models` lists kimi-k2.6, kimi-k2.7-code
+  //     and kimi-k3 under the opencode-go/ gateway — and nothing else.
+  //     The shim prefixes the bare name, so these are the valid inputs.
+  //   - standalone kimi-cli: takes only its OWN `[models]` keys
+  //     (kimi-code/k3, …), which are per-account and server-issued. Those
+  //     are read live from the user's config at seed time and override
+  //     this list entirely (see readKimiModelKeys in voices.ts), so this
+  //     list is really the opencode-transport catalog.
+  // Index 0 must match UI_LINEAGE_DEFAULT_MODEL.kimi. Holding k2.6 as the
+  // default rather than auto-rotating to k3, so existing installs don't
+  // silently change model on upgrade — k3 is one dropdown click away.
   kimi: [
     "kimi-k2.6",
-    "kimi-k2-thinking-turbo",
-    "kimi-k2-turbo-preview",
-    "kimi-k2-thinking",
-    "kimi-k2.5",
+    "kimi-k3",
+    "kimi-k2.7-code",
   ],
   // Grok Build ships a single model name today — `grok-build` — which xAI
   // versions internally. From `grok models` against an authed install:

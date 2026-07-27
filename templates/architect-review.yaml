@@ -17,7 +17,7 @@ phases:
     doer:
       lineage: anthropic
       models:
-        - claude-opus-4-7
+        - claude-opus-5
     reviewer:
       require: 0
       crossLineage: false

@@ -35,7 +35,7 @@ phases:
             - gemini-3.1-pro-preview
         - lineage: anthropic
           models:
-            - claude-opus-4-7
+            - claude-opus-5
         # opencode-go transports — both run through the opencode binary
         # (lineage=opencode). Different model families (Moonshot's Kimi
         # vs DeepSeek) carried on the voice's vendor_family for diversity

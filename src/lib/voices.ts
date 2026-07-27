@@ -15,9 +15,11 @@
  */
 
 import { execFile } from 'node:child_process';
+import os from 'node:os';
 import { promisify } from 'node:util';
 import { detectAllClis, type DetectableCli } from './cli-detect.js';
 import { settings, voices, type VoiceUpsertInput } from './db/index.js';
+import { readKimiModelKeys } from './kimi-config.js';
 import { UI_LINEAGE_AVAILABLE_MODELS } from './lineage-maps.js';
 
 const run = promisify(execFile);
@@ -186,11 +188,24 @@ export async function seedCliVoices(): Promise<{
   const migrationData = isFirstBoot ? await readMigrationSettings() : null;
 
   // Live model discovery for CLIs that expose a programmatic catalog.
-  // Codex is the only single-model CLI that does (`codex debug models`).
-  // Claude / Gemini / Kimi don't, so they always use the static catalog.
+  // Codex does it over a subprocess (`codex debug models`). Claude and
+  // Gemini expose nothing, so they always use the static catalog.
   const codexLive = detectedById.get('codex-cli')?.found
     ? await probeCodexModelsLive()
     : null;
+
+  // Kimi's catalog is a file read, not a subprocess: `/login` writes the
+  // account's models into the `[models]` table of the CLI's config, and
+  // those keys are the ONLY strings its `-m` flag accepts. The static
+  // list holds vendor ids (`kimi-k2.6`) which the standalone CLI rejects
+  // outright, so when the user has a wired config, their keys win.
+  // Note the explicit length check — an empty array is truthy, and an
+  // empty `[models]` table means "not wired", which must fall through to
+  // the static catalog (the opencode-go transport uses those ids).
+  const kimiKeys = detectedById.get('kimi-cli')?.found
+    ? readKimiModelKeys(os.homedir())
+    : [];
+  const kimiLive = kimiKeys.length > 0 ? kimiKeys : null;
 
   let added = 0;
   let updated = 0;
@@ -214,7 +229,8 @@ export async function seedCliVoices(): Promise<{
     const uiLineage = LINEAGE_TO_UI[lineage];
     // Prefer live probe over static catalog; fall back to static when the
     // CLI doesn't expose model listing or the probe failed.
-    const liveModels = cli === 'codex-cli' ? codexLive : null;
+    const liveModels =
+      cli === 'codex-cli' ? codexLive : cli === 'kimi-cli' ? kimiLive : null;
     const staticModels = UI_LINEAGE_AVAILABLE_MODELS[uiLineage] ?? [];
     const models = liveModels ?? staticModels;
     const latestModel = models[0] ?? `${cli}-default`;

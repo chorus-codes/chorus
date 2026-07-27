@@ -21,6 +21,10 @@ import { randomUUID } from 'crypto';
 
 import { _resetDbForTests, getDb, settings, voices } from '@/lib/db';
 import { _internals, seedCliVoices } from '@/lib/voices';
+import {
+  UI_LINEAGE_AVAILABLE_MODELS,
+  UI_LINEAGE_DEFAULT_MODEL,
+} from '@/lib/lineage-maps';
 
 let dbPath: string;
 
@@ -135,9 +139,17 @@ describe('migrationFor', () => {
   type MigrationData = { byUiLineage: Map<UiLineage, string[] | undefined> };
 
   it('absent → default model only is enabled', () => {
+    // Reads the default from the catalog rather than pinning an id: the
+    // rule under test is "the lineage default is the one enabled", which
+    // must survive a model-catalog refresh (2026-07-27: opus-4-7 → opus-5).
+    const defaultModel = UI_LINEAGE_DEFAULT_MODEL.claude;
+    const nonDefault = (UI_LINEAGE_AVAILABLE_MODELS.claude ?? []).find(
+      (m) => m !== defaultModel,
+    );
+    expect(nonDefault).toBeDefined();
     const data: MigrationData = { byUiLineage: new Map([['claude', undefined]]) };
-    expect(migrationFor(data, 'claude', 'claude-opus-4-7')).toBe(true);
-    expect(migrationFor(data, 'claude', 'claude-sonnet-4-6')).toBe(false);
+    expect(migrationFor(data, 'claude', defaultModel)).toBe(true);
+    expect(migrationFor(data, 'claude', nonDefault as string)).toBe(false);
   });
 
   it('empty array → no models enabled', () => {
@@ -225,24 +237,40 @@ describe('seedCliVoices', () => {
   // first-boot migration must still seed the voices so the intent
   // isn't lost when the CLI later installs.
   it('first-boot migration seeds voices for undetected CLIs when settings exist', async () => {
-    // Simulate a setting for kimi (which may or may not be installed
-    // on the test host). We seed the setting BEFORE seeding voices so
-    // migration sees first-boot=true.
-    await settings.set('kimi.enabled_models', ['kimi-k2.5']);
+    // Point HOME at an empty dir for the duration: kimi's catalog is now
+    // read live from the developer's own ~/.kimi config when one is wired
+    // (those keys are the only strings its CLI accepts). Without this the
+    // assertion below would pass or fail depending on whose laptop runs
+    // the suite. Empty home → no keys → the static catalog is used.
+    const realHome = process.env.HOME;
+    const emptyHome = path.join(os.tmpdir(), `chorus-seed-home-${randomUUID()}`);
+    fs.mkdirSync(emptyHome, { recursive: true });
+    process.env.HOME = emptyHome;
 
-    await seedCliVoices();
+    // A model from the static catalog — the setting is seeded BEFORE
+    // voices so migration sees first-boot=true.
+    const migratedModel = (UI_LINEAGE_AVAILABLE_MODELS.kimi ?? [])[1];
+    expect(migratedModel).toBeDefined();
 
-    // Even if kimi-cli isn't detected on this host, the setting's
-    // intent should be migrated into voice rows.
-    const kimiVoices = await voices.list({ provider: 'kimi-cli' });
-    if (kimiVoices.length > 0) {
-      // Migrated rows exist regardless of detect outcome.
-      const migrated = kimiVoices.find((v) => v.model_id === 'kimi-k2.5');
-      expect(migrated).toBeDefined();
-      expect(migrated?.enabled).toBe(true);
+    try {
+      await settings.set('kimi.enabled_models', [migratedModel]);
+
+      await seedCliVoices();
+
+      // Even if kimi-cli isn't detected on this host, the setting's
+      // intent should be migrated into voice rows.
+      const kimiVoices = await voices.list({ provider: 'kimi-cli' });
+      if (kimiVoices.length > 0) {
+        // Migrated rows exist regardless of detect outcome.
+        const migrated = kimiVoices.find((v) => v.model_id === migratedModel);
+        expect(migrated).toBeDefined();
+        expect(migrated?.enabled).toBe(true);
+      }
+    } finally {
+      if (realHome) process.env.HOME = realHome;
+      else delete process.env.HOME;
+      fs.rmSync(emptyHome, { recursive: true, force: true });
     }
-    // Even on a host where kimi IS installed, the migration should still
-    // produce the kimi-k2.5 row with enabled=true (i.e., not skipped).
   });
 
   it('first-boot migration with empty array → all curated disabled', async () => {
