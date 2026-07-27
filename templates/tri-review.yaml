@@ -1,6 +1,6 @@
 id: tri-review
 name: Tri-Review
-description: Single-round, three-reviewer template. Claude Opus 4.7 produces; Codex (gpt-5.5), Gemini 3.1 Pro Preview, and Kimi K2.6 review independently. Quorum is 2 of 3.
+description: Single-round, three-reviewer template. Claude Opus 5 produces; Codex (gpt-5.5), Gemini 3.1 Pro Preview, and Kimi K2.6 review independently. Quorum is 2 of 3.
 author: chorus
 agreementThreshold: 0.66
 onThresholdMet: ask
@@ -13,11 +13,11 @@ phases:
   - id: review
     kind: review
     title: Tri-Review
-    description: Claude Opus 4.7 produces; Codex, Gemini, and Kimi review independently. 2-of-3 quorum.
+    description: Claude Opus 5 produces; Codex, Gemini, and Kimi review independently. 2-of-3 quorum.
     doer:
       lineage: anthropic
       models:
-        - claude-opus-4-7
+        - claude-opus-5
     reviewer:
       require: 2
       crossLineage: true

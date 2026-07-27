@@ -29,6 +29,11 @@ import { spawnHeadless } from '../headless.js';
 import { parseOpencode, parseOpencodeExit, parseKimi } from './parsers/index.js';
 import { atomicWriteJsonSync } from '../../lib/atomic-write.js';
 import { detectAllClis, resolveCliBinaryPath } from '../../lib/cli-detect.js';
+import {
+  readKimiDefaultModel,
+  readKimiModelKeys,
+  resolveKimiModel,
+} from '../../lib/kimi-config.js';
 import { wrapWithPty } from './opencode.js';
 import { assertSandboxSupported, sandboxFailClosed } from './sandbox-guard.js';
 
@@ -143,18 +148,12 @@ export function chooseKimiTransport(
   }
 
   // Standalone Python kimi-cli — usable only when a model is wired:
-  // non-empty `default_model` OR any `[models.<name>]` table.
-  const configPath = path.join(homeDir, '.kimi', 'config.toml');
-  if (fs.existsSync(configPath)) {
-    try {
-      const body = fs.readFileSync(configPath, 'utf-8');
-      const defaultModel = body.match(/^\s*default_model\s*=\s*["']([^"']+)["']/m);
-      const hasDefault = defaultModel != null && defaultModel[1].length > 0;
-      const hasModelsTable = /^\[models\.[A-Za-z0-9_.-]+\]/m.test(body);
-      if (hasDefault || hasModelsTable) return 'kimi-cli';
-    } catch {
-      /* fall through */
-    }
+  // non-empty `default_model` OR any `[models.<name>]` table. The shared
+  // parse also matches QUOTED keys (`[models."kimi-code/k2.6"]`), which is
+  // the shape `/login` actually writes — the old bare-key-only regex missed
+  // a logged-in install whose default_model happened to be unset.
+  if (readKimiDefaultModel(homeDir) !== null || readKimiModelKeys(homeDir).length > 0) {
+    return 'kimi-cli';
   }
 
   return 'opencode';
@@ -194,6 +193,26 @@ function writeTransportMeta(cwd: string, binary: string, model: string): void {
   } catch {
     /* informational only */
   }
+}
+
+/**
+ * The kimi CLI reports "no model configured" as the literal text
+ * `LLM not set` — on stdout, with exit code 0, having written nothing.
+ * Left alone that reads as a reviewer who produced an empty answer; the
+ * runner's no_output retry then burns a second attempt on a run that can
+ * never succeed until the user logs in.
+ */
+export function kimiNotConfiguredError(output: string): AgentEvent[] {
+  if (!/\bLLM not set\b/i.test(output)) return [];
+  return [
+    {
+      type: 'error',
+      kind: 'auth_missing',
+      message:
+        'kimi has no model configured ("LLM not set"). Run `kimi` and use /login ' +
+        'to pick a model, then re-run.',
+    },
+  ];
 }
 
 export const kimiShim: AgentShim = {
@@ -267,16 +286,28 @@ export const kimiShim: AgentShim = {
     const transport = detectKimiTransport();
 
     if (transport === 'kimi-cli') {
-      const model = opts.model ?? 'kimi-k2.6';
+      // The CLI matches `-m` exactly against its own `[models]` keys
+      // (`kimi-code/k3`), NOT against vendor ids (`moonshotai/kimi-k3`).
+      // An unmatched `-m` doesn't fall back to default_model — it yields
+      // an empty model, "LLM not set", exit 0, and a 0-byte answer. So
+      // resolve against what this install actually has, and when nothing
+      // matches drop the flag entirely to inherit the CLI's own default.
+      const resolved = resolveKimiModel(opts.model, readKimiModelKeys(os.homedir()));
+      const model = resolved ?? readKimiDefaultModel(os.homedir()) ?? 'kimi (CLI default)';
       writeTransportMeta(opts.cwd, 'kimi-cli', model);
       const args = ['--print', '--output-format', 'stream-json'];
-      if (opts.model) args.push('-m', opts.model);
+      if (resolved) args.push('-m', resolved);
       const run = spawnHeadless({
         command: 'kimi',
         args,
         cwd: opts.cwd,
         stdinPayload: opts.promptText,
         parseLine: parseKimi,
+        // "LLM not set" is how the CLI reports "no model is configured" —
+        // and it says it on stdout with exit code 0, so without this the
+        // run looks like a successful reviewer that simply had nothing to
+        // say. Turn it into the error it is, with the CLI's own remedy.
+        onExit: (fullStdout, fullStderr) => kimiNotConfiguredError(fullStdout + fullStderr),
         // cli tag is the binary that actually ran — error messages quote
         // it as "{cli} exited N", so misattributing failures to the wrong
         // binary sends the user looking at the wrong PATH/auth/install.
