@@ -282,6 +282,20 @@ describe('precheckLineage', () => {
       expect(result.ok).toBe(true);
     });
 
+    it('passes for a native Kimi Code login (~/.kimi/credentials/kimi-code.json)', async () => {
+      // The code.kimi.com build never writes ~/.kimi/auth.json — probing
+      // that path alone gated a logged-in user as auth_missing (#107 thread).
+      writeFakeCred('.kimi/credentials/kimi-code.json');
+      const result = await precheckLineage('moonshot');
+      expect(result.ok).toBe(true);
+    });
+
+    it('still blocks moonshot when no kimi or opencode credential exists', async () => {
+      const result = await precheckLineage('moonshot');
+      expect(result.ok).toBe(false);
+      if (!result.ok) expect(result.reason).toBe('auth_missing');
+    });
+
     it('per-lineage CTA mentions the right login command', async () => {
       const cases: Array<{ lineage: 'anthropic' | 'openai' | 'google' | 'opencode' | 'moonshot'; needle: RegExp }> = [
         { lineage: 'anthropic', needle: /claude login/i },

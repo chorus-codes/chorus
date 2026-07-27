@@ -88,6 +88,13 @@ const CRED_PATHS: Record<CliLineage, () => string[]> = {
   opencode: () => CRED_PATHS_OPENCODE(),
   moonshot: () => [
     path.join(os.homedir(), '.kimi', 'auth.json'),
+    // The native Kimi Code build (code.kimi.com — the one #98/#99 taught
+    // detection about) does NOT write ~/.kimi/auth.json. Its OAuth tokens
+    // land in ~/.kimi/credentials/kimi-code.json, so a freshly logged-in
+    // user was still gated as auth_missing on the auth.json probe alone.
+    // This path also feeds getMostRecentCredMtime, so it restores the
+    // auto-heal-after-relogin signal for kimi. (#107 follow-up.)
+    path.join(os.homedir(), '.kimi', 'credentials', 'kimi-code.json'),
     // The kimi shim delegates to `opencode --model opencode-go/kimi-k2.6`
     // when the requested model carries the opencode-go/ prefix, so a
     // moonshot voice routed via opencode is actually authed by opencode's
