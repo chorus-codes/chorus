@@ -67,6 +67,7 @@ function discoverNpmPrefixes(): string[] {
       timeout: 1000,
       stdio: ['ignore', 'pipe', 'ignore'],
       shell: isWindows,
+      windowsHide: true, // #107 — shell:true means a cmd.exe console otherwise
     });
     if (result.status === 0) {
       const prefix = result.stdout.trim();
@@ -199,7 +200,7 @@ export interface CliDetection {
 
 function pathLookup(name: string): string | null {
   const cmd = isWindows ? 'where' : 'which';
-  const result = spawnSync(cmd, [name], { encoding: 'utf-8' });
+  const result = spawnSync(cmd, [name], { encoding: 'utf-8', windowsHide: true }); // #107
   if (result.status !== 0) return null;
   // `where` returns one path per line on Windows; take the first.
   const first = result.stdout.split(/\r?\n/).map((s) => s.trim()).find((s) => s.length > 0);

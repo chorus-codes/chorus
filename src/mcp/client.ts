@@ -105,6 +105,7 @@ async function tryAutoStart(): Promise<boolean> {
     const child = spawn(process.execPath, [binPath, "start", "--daemon-only"], {
       detached: true,
       stdio: "ignore",
+      windowsHide: true, // #107 — auto-start must stay invisible to the editor
     });
     child.unref();
   } catch (err) {

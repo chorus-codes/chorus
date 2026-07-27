@@ -437,6 +437,99 @@ describe('spawnHeadless shell:true gating', () => {
   });
 });
 
+describe('#107 — windowsHide on every spawn out of headless', () => {
+  it('sets windowsHide on the CLI spawn (cmd.exe console would otherwise flash)', async () => {
+    setPlatform('win32');
+    stubCliPaths();
+    stubCliDetect((c) => (c === 'claude' ? 'C:\\npm\\claude.cmd' : c));
+
+    const spawnSyncSpy = vi.fn();
+    const { child, triggerExit } = makeFakeChild();
+    const spawnSpy = vi.fn((_cmd: string, _args: string[], _opts?: object) => child);
+
+    vi.doMock('node:child_process', () => ({ spawn: spawnSpy, spawnSync: spawnSyncSpy }));
+    vi.doMock('child_process', () => ({ spawn: spawnSpy, spawnSync: spawnSyncSpy }));
+
+    const { spawnHeadless } = await import('../src/daemon/headless');
+    const run = spawnHeadless({
+      command: 'claude',
+      args: ['--print'],
+      cwd: process.cwd(),
+      parseLine: () => [],
+      cli: 'claude',
+    });
+    triggerExit(0);
+    await run.done;
+
+    const opts = spawnSpy.mock.calls[0]?.[2] as { shell?: boolean; windowsHide?: boolean };
+    // shell:true routes through cmd.exe, which gets its own VISIBLE console
+    // unless windowsHide is set. One flash per reviewer per round otherwise.
+    expect(opts.shell).toBe(true);
+    expect(opts.windowsHide).toBe(true);
+  });
+
+  it('sets windowsHide on the `where` binary-resolution probe', async () => {
+    setPlatform('win32');
+    stubCliPaths();
+    stubCliDetect(); // identity → bare name, so `where` runs
+
+    const spawnSyncSpy = vi.fn().mockReturnValue({
+      status: 0,
+      stdout: 'C:\\path\\codex.cmd\r\n',
+      stderr: '',
+      pid: 0,
+      output: [],
+      signal: null,
+    });
+    const { child, triggerExit } = makeFakeChild();
+    const spawnSpy = vi.fn((_cmd: string, _args: string[], _opts?: object) => child);
+
+    vi.doMock('node:child_process', () => ({ spawn: spawnSpy, spawnSync: spawnSyncSpy }));
+    vi.doMock('child_process', () => ({ spawn: spawnSpy, spawnSync: spawnSyncSpy }));
+
+    const { spawnHeadless } = await import('../src/daemon/headless');
+    const run = spawnHeadless({
+      command: 'codex',
+      args: ['exec'],
+      cwd: process.cwd(),
+      parseLine: () => [],
+      cli: 'codex',
+    });
+    triggerExit(0);
+    await run.done;
+
+    const whereOpts = spawnSyncSpy.mock.calls[0]?.[2] as { windowsHide?: boolean };
+    expect(whereOpts.windowsHide).toBe(true);
+  });
+
+  it('still sets windowsHide on Unix spawns (inert there, so no platform branch)', async () => {
+    setPlatform('linux');
+    stubCliPaths();
+    stubCliDetect();
+
+    const { child, triggerExit } = makeFakeChild();
+    const spawnSpy = vi.fn((_cmd: string, _args: string[], _opts?: object) => child);
+
+    vi.doMock('node:child_process', () => ({ spawn: spawnSpy, spawnSync: vi.fn() }));
+    vi.doMock('child_process', () => ({ spawn: spawnSpy, spawnSync: vi.fn() }));
+
+    const { spawnHeadless } = await import('../src/daemon/headless');
+    const run = spawnHeadless({
+      command: 'claude',
+      args: ['--print'],
+      cwd: process.cwd(),
+      parseLine: () => [],
+      cli: 'claude',
+    });
+    triggerExit(0);
+    await run.done;
+
+    const opts = spawnSpy.mock.calls[0]?.[2] as { windowsHide?: boolean; detached?: boolean };
+    expect(opts.windowsHide).toBe(true);
+    expect(opts.detached).toBe(true); // unchanged: Unix process-group behaviour
+  });
+});
+
 describe('resolveBinaryPath — #104: spawn the detection-resolved absolute path', () => {
   it('spawns the absolute path detection resolved on Linux (not the bare name)', async () => {
     setPlatform('linux');

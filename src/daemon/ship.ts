@@ -367,6 +367,7 @@ function run(command: string, args: string[], opts: { cwd: string }): RunResult 
       encoding: 'utf-8',
       // 60s per command — covers a slow `gh pr create` against a heavy repo.
       timeout: 60_000,
+      windowsHide: true, // #107 — git/gh are console apps; no flashing window
     });
     return {
       ok: result.status === 0,
