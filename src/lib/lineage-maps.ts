@@ -161,16 +161,9 @@ export const UI_LINEAGE_DEFAULT_MODEL: Record<UILineage, string> = {
   // Grok Build has one model today (grok-build). xAI ships single-binary
   // versioned models, so this stays stable across CLI bumps.
   grok: "grok-build",
-  // Informational only — the antigravity shim doesn't pass a model. The
-  // id matches what `agy models` actually lists for the build the shim
-  // documents (bare "gemini-3.5-flash" is not a valid id there; every
-  // entry carries a -high/-medium/-low reasoning suffix).
-  // NOTE: agy 1.1.7 HAS grown `--model` plus an `agy models` subcommand
-  // listing 11 models — including non-Google ones (claude-sonnet-4-6,
-  // gpt-oss-120b-medium). Wiring selection through the shim is a
-  // follow-up; it also needs lineage rethink, since an agy voice running
-  // a Claude model is not a google-family reviewer for quorum purposes.
-  antigravity: "gemini-3.5-flash-high",
+  // agy 1.1.7 takes `--model` and the shim now passes it. First entry of
+  // `agy models`, which is also the newest flash-high tier.
+  antigravity: "gemini-3.6-flash-high",
 };
 
 /**
@@ -262,11 +255,29 @@ export const UI_LINEAGE_AVAILABLE_MODELS: Partial<Record<UILineage, string[]>> =
   // SuperGrok Heavy subscription required for invocation. Single-entry
   // list matches UI_LINEAGE_DEFAULT_MODEL.grok.
   grok: ['grok-build'],
-  // Antigravity ships a single locked model (Gemini 3.5 Flash). The chorus-
-  // side id `gemini-3.5-flash` mirrors what `agy` self-reports — the CLI
-  // doesn't accept a --model flag, but listing it here keeps the voices
-  // catalog / template dropdown consistent with other single-model CLIs.
-  antigravity: ['gemini-3.5-flash'],
+  // Static fallback only — when agy is installed, `agy models` wins
+  // (see voices.ts). Captured from agy 1.1.7 on 2026-07-27; the bare
+  // `gemini-3.5-flash` this replaced was never a valid id, since every
+  // entry carries a -high/-medium/-low reasoning tier.
+  //
+  // Note the three non-Google entries. An Antigravity subscriber may have
+  // no Claude or OpenAI subscription of their own, so this is a real way
+  // to reach those models — the choice is theirs. The voice row's
+  // vendor_family (set in voices.ts) keeps quorum honest about which
+  // family is actually answering.
+  antigravity: [
+    'gemini-3.6-flash-high',
+    'gemini-3.6-flash-medium',
+    'gemini-3.6-flash-low',
+    'gemini-3.5-flash-high',
+    'gemini-3.5-flash-medium',
+    'gemini-3.5-flash-low',
+    'gemini-3.1-pro-high',
+    'gemini-3.1-pro-low',
+    'claude-sonnet-4-6',
+    'claude-opus-4-6-thinking',
+    'gpt-oss-120b-medium',
+  ],
 };
 
 export function uiLineageDefaultModel(lineage: string | undefined): string | undefined {

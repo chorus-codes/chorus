@@ -308,6 +308,31 @@ describe('seedCliVoices', () => {
     expect(await voices.getById('claude-code:claude-stale-deprecated')).toBeNull();
   });
 
+  it('antigravity: Phase 2 injects a live catalog that overrides the static one', async () => {
+    // `agy models` is a ~3s network fetch, so Phase 1 never runs it —
+    // it seeds from the static catalog and Phase 2 re-runs this same
+    // idempotent seed with the live list. This is that second call.
+    await seedCliVoices();
+    const agyRows = await voices.list({ provider: 'antigravity-cli' });
+    if (agyRows.length === 0) return; // agy not on this host
+
+    await seedCliVoices({ antigravityModels: ['gemini-9.9-flash-high', 'claude-sonnet-4-6'] });
+
+    // Live list wins: its entries exist...
+    const live = await voices.getById('antigravity-cli:claude-sonnet-4-6');
+    expect(live).toBeDefined();
+    // ...and a static-catalog model the account can't reach is dropped.
+    expect(await voices.getById('antigravity-cli:gemini-3.1-pro-low')).toBeNull();
+
+    // A Claude model reached through agy is the user's call — but it must
+    // be recorded as anthropic-family so quorum fallback doesn't treat it
+    // as a Google-family reviewer.
+    expect(live?.vendor_family).toBe('anthropic');
+    const provider = await voices.getById('antigravity-cli');
+    expect(provider?.model_id).toBe('gemini-9.9-flash-high');
+    expect(provider?.vendor_family).toBe('google');
+  });
+
   it('catalog drift: immutable provider row never gets deleted even when its model_id is stale', async () => {
     await seedCliVoices();
     const before = await voices.getById('claude-code');

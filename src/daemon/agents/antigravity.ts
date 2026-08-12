@@ -4,10 +4,20 @@
  * Dispatches to `agy -p <prompt> --dangerously-skip-permissions`,
  * parsing plain-text stdout (no JSON streaming mode exists).
  *
- * Status (2026-05-20): Level 3 shim with empirical happy-path probe
- * verified against agy 1.0.0 (Google AI Pro subscription, victor@99x.agency).
- * The CLI locks the model to Gemini 3.5 Flash (High) — there's no
- * `--model` flag. Model field on this shim is informational only.
+ * Status (2026-07-27): Level 3 shim, re-probed against agy 1.1.7.
+ * The CLI is NO LONGER single-model: it grew a `--model` flag and an
+ * `agy models` subcommand listing 11 models, spanning vendors —
+ * gemini-3.6/3.5-flash and 3.1-pro, but also claude-sonnet-4-6,
+ * claude-opus-4-6-thinking and gpt-oss-120b-medium.
+ *
+ * Running a Claude model through `agy` is a legitimate choice — an
+ * Antigravity subscriber may have no Claude subscription of their own,
+ * and this is the only way they reach that model. Chorus passes the
+ * selection through rather than second-guessing it. What it does NOT do
+ * is pretend the reviewer is Google-family: the voice row carries
+ * `vendor_family` from the model name (see voices.ts), so quorum
+ * fallback and diversity still see anthropic when anthropic is what's
+ * actually answering — the same split opencode-go voices use.
  *
  * Auth: OAuth token at ~/.gemini/antigravity-cli/antigravity-oauth-token.
  * Without it, agy attempts an inline browser-OAuth flow that hangs
@@ -21,21 +31,40 @@ import type {
   HeadlessSpawnOptions,
   AgentEvent,
 } from './types.js';
-import { quotePath } from './quote.js';
+import { quotePath, quoteValue, validateValue } from './quote.js';
 import { spawnHeadless } from '../headless.js';
 import { parseAntigravity, parseAntigravityExit } from './parsers/index.js';
+
+/**
+ * Pure argv builder for `agy -p`. Exported for direct testing, mirroring
+ * codex's buildHeadlessArgs — the argv is the whole contract with the CLI,
+ * and it's the part that silently rots when the CLI adds a flag.
+ */
+export function buildHeadlessArgs(opts: HeadlessSpawnOptions): string[] {
+  return [
+    '-p',
+    opts.promptText,
+    '--dangerously-skip-permissions',
+    // Omitted when the slot names no model, so the CLI keeps its own
+    // default instead of us naming one this account may not have.
+    ...(opts.model ? ['--model', opts.model] : []),
+  ];
+}
 
 export const antigravityShim: AgentShim = {
   lineage: 'antigravity',
   name: 'antigravity-cli',
 
   buildLaunchCommand(opts: AgentSpawnOptions): string {
-    // tmux interactive path. agy's TUI doesn't accept --model and
-    // doesn't need a --dangerously-skip-permissions flag in interactive
-    // mode (it prompts for approval inline). `opts.model` is ignored
-    // because the CLI hard-locks Gemini 3.5 Flash.
+    // tmux interactive path. No --dangerously-skip-permissions here: the
+    // TUI prompts for approval inline, which is the point of watching a
+    // session. `--model` IS accepted (it's a global flag, "Model for the
+    // current CLI session"), so an interactive takeover runs the same
+    // model the headless slot would have.
+    validateValue('model', opts.model);
     const cwd = quotePath(opts.cwd);
-    return `cd ${cwd} && agy`;
+    const model = opts.model ? ` --model ${quoteValue(opts.model)}` : '';
+    return `cd ${cwd} && agy${model}`;
   },
 
   formatPrompt(opts: AgentNudgeOptions): string {
@@ -56,7 +85,9 @@ export const antigravityShim: AgentShim = {
    *   established UX. Without it, headless dispatch hangs on the first
    *   tool-approval prompt that has no TTY.
    *
-   * No `--model` flag — the binary is locked to Gemini 3.5 Flash.
+   * - `--model` — passed through when the slot names one. Omitted when
+   *   it doesn't, so the CLI keeps its own default rather than us
+   *   guessing at a model this account may not have access to.
    * No `--max-turns` — agy doesn't expose multi-turn cap; reviewer
    *   slots are single-shot by chorus convention (one prompt, one
    *   answer file), so this hasn't been an issue in probe runs.
@@ -68,15 +99,9 @@ export const antigravityShim: AgentShim = {
    * flow inline and the headless dispatch hangs forever.
    */
   runHeadless(opts: HeadlessSpawnOptions): AsyncIterable<AgentEvent> {
-    const args = [
-      '-p',
-      opts.promptText,
-      '--dangerously-skip-permissions',
-    ];
-
     const run = spawnHeadless({
       command: 'agy',
-      args,
+      args: buildHeadlessArgs(opts),
       cwd: opts.cwd,
       parseLine: parseAntigravity,
       onExit: (out, err, code) => parseAntigravityExit(out, err, code),

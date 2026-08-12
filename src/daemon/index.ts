@@ -334,6 +334,21 @@ async function main(): Promise<void> {
           '[daemon] voices Phase 2 (opencode): skipped (CLI not detected or shell-out failed)',
         );
       }
+
+      // Antigravity's catalog is a ~3s network fetch (`agy models`), so it
+      // rides the same post-listen pass rather than the boot path. Runs
+      // after opencode so a slow agy can't delay those rows.
+      const { seedAntigravityVoicesAsync } = await import('../lib/voices.js');
+      const agy = await seedAntigravityVoicesAsync();
+      if (agy) {
+        console.log(
+          `[daemon] voices Phase 2 (antigravity): +${agy.added} added, ${agy.updated} updated, ${agy.disabled} auto-disabled`,
+        );
+      } else {
+        console.log(
+          '[daemon] voices Phase 2 (antigravity): skipped (CLI not detected or probe failed)',
+        );
+      }
     } catch (err) {
       console.warn(
         '[daemon] voices Phase 2 failed:',
