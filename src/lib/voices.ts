@@ -58,11 +58,36 @@ const SINGLE_MODEL_CLIS: ReadonlyArray<{
   // ship more model IDs in future; if/when `grok models` exposes them,
   // promote to a multi-model live-probe like opencode/codex.
   { cli: 'grok-cli', provider: 'grok-cli', lineage: 'grok' },
-  // Antigravity CLI ships locked to Gemini 3.5 Flash (High) — `agy` has
-  // no `--model` flag. Treat as single-model; if Google ever exposes
-  // multi-model selection here, promote to a live-probe like opencode.
+  // Antigravity is no longer locked to one model: agy 1.1.7 takes
+  // `--model` and lists 11 via `agy models`, so it's live-probed here
+  // like codex. "Single-model" now means only that it keeps ONE
+  // immutable provider row — the curated rows hang off it as usual.
   { cli: 'antigravity-cli', provider: 'antigravity-cli', lineage: 'antigravity' },
 ];
+
+/**
+ * Which vendor actually trained the model behind a name, independent of
+ * which binary dispatches it. Used wherever a CLI can front models from
+ * more than one vendor — the opencode-go gateway, and now `agy`, whose
+ * catalog spans Gemini, Claude and gpt-oss. Diversity scoring and the
+ * template-adapter's fallback chain read this, so a Claude-via-agy voice
+ * is correctly treated as an anthropic-family reviewer even though the
+ * lineage (the thing that must be installed and authed) is antigravity.
+ *
+ * Returns null when the name matches no known vendor.
+ */
+export function vendorFamilyForModel(modelName: string): string | null {
+  const t = modelName.toLowerCase();
+  if (t.includes('kimi')) return 'moonshot';
+  if (t.includes('claude')) return 'anthropic';
+  if (t.includes('gpt') || /(?:^|[^a-z])o[1-9](?:$|[^a-z0-9])/.test(t)) return 'openai';
+  if (t.includes('gemini')) return 'google';
+  if (t.includes('deepseek')) return 'deepseek';
+  if (t.includes('llama') || t.includes('meta')) return 'meta';
+  if (t.includes('mistral') || t.includes('mixtral')) return 'mistral';
+  if (t.includes('grok') || t.includes('xai')) return 'xai';
+  return null;
+}
 
 /**
  * OpenCode gateway model name → (lineage, vendor_family). The model name
@@ -91,17 +116,7 @@ export function classifyOpencodeModel(qualified: string): {
   // moves into `vendor_family` so diversity scoring and cost UX still
   // see "moonshot" / "deepseek" / "anthropic" / etc.
   if (gateway === 'opencode-go') {
-    if (t.includes('kimi')) return { lineage: 'opencode', vendor_family: 'moonshot' };
-    if (t.includes('claude')) return { lineage: 'opencode', vendor_family: 'anthropic' };
-    if (t.includes('gpt') || /(?:^|[^a-z])o[1-9](?:$|[^a-z0-9])/.test(t)) {
-      return { lineage: 'opencode', vendor_family: 'openai' };
-    }
-    if (t.includes('gemini')) return { lineage: 'opencode', vendor_family: 'google' };
-    if (t.includes('deepseek')) return { lineage: 'opencode', vendor_family: 'deepseek' };
-    if (t.includes('llama') || t.includes('meta')) return { lineage: 'opencode', vendor_family: 'meta' };
-    if (t.includes('mistral') || t.includes('mixtral')) return { lineage: 'opencode', vendor_family: 'mistral' };
-    if (t.includes('grok') || t.includes('xai')) return { lineage: 'opencode', vendor_family: 'xai' };
-    return { lineage: 'opencode', vendor_family: null };
+    return { lineage: 'opencode', vendor_family: vendorFamilyForModel(tail) };
   }
 
   // Native lineage matching (OpenRouter `anthropic/...`, `openai/...`,
@@ -154,6 +169,57 @@ async function probeCodexModelsLive(): Promise<string[] | null> {
 }
 
 /**
+ * vendor_family for a single-model-CLI voice row, as spread-in options.
+ *
+ * Only antigravity gets one. Every other CLI in SINGLE_MODEL_CLIS dispatches
+ * exactly one vendor's models, so lineage already says everything
+ * vendor_family would, and writing it would churn existing rows for no
+ * gain. `agy` is the exception: its catalog spans Gemini, Claude and
+ * gpt-oss, so without this a Claude-via-agy voice would look Google-family
+ * to the template adapter's fallback chain.
+ */
+function vendorFamilyFor(
+  lineage: DaemonLineage,
+  model: string,
+): Pick<VoiceUpsertInput, 'vendor_family'> | Record<string, never> {
+  if (lineage !== 'antigravity') return {};
+  return { vendor_family: vendorFamilyForModel(model) };
+}
+
+/**
+ * Live model probe for the Antigravity CLI — `agy models` prints one
+ * model id per line. As of 1.1.7 that list spans vendors and differs by
+ * account tier, so the installed CLI is the only trustworthy source.
+ *
+ * NOT called from Phase 1: this is a NETWORK fetch (agy prints a
+ * "Fetching available models..." spinner) measured at 2.6–3.1s, which is
+ * boot latency every agy user would pay before the daemon starts
+ * listening. It runs in the Phase 2 warmup instead — see
+ * seedAntigravityVoicesAsync.
+ *
+ * Returns null on any failure (CLI absent, empty output, timeout) so the
+ * caller falls back to the static catalog.
+ */
+async function probeAntigravityModelsLive(): Promise<string[] | null> {
+  try {
+    const { stdout } = await run('agy', ['models'], {
+      timeout: 10_000,
+      shell: process.platform === 'win32',
+      windowsHide: true,
+    });
+    const models = stdout
+      .split('\n')
+      .map((l) => l.trim())
+      // Ignore decoration and anything that isn't a plain model id — the
+      // parse must not turn a future header line into a phantom voice.
+      .filter((l) => /^[a-z0-9][a-z0-9.\-_]*$/i.test(l));
+    return models.length > 0 ? models : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Phase 1 — synchronous seed for single-model CLIs.
  *
  * - For each detected single-model CLI: upsert immutable voice row
@@ -171,8 +237,17 @@ async function probeCodexModelsLive(): Promise<string[] | null> {
  *   which left the home page looking sparse.
  *
  * Returns counts for logging.
+ *
+ * `antigravityModels` lets the Phase 2 warmup inject a catalog it fetched
+ * asynchronously. Phase 1 must stay subprocess-light, and `agy models` is
+ * a ~3s network call — so Phase 1 passes nothing and seeds agy from the
+ * static catalog, then Phase 2 re-runs this same (idempotent) seed with
+ * the live list. Reconciliation, row ids and enable semantics are
+ * therefore identical whichever path discovered the model.
  */
-export async function seedCliVoices(): Promise<{
+export async function seedCliVoices(opts?: {
+  antigravityModels?: string[] | null;
+}): Promise<{
   added: number;
   updated: number;
   disabled: number;
@@ -192,6 +267,11 @@ export async function seedCliVoices(): Promise<{
   // Gemini expose nothing, so they always use the static catalog.
   const codexLive = detectedById.get('codex-cli')?.found
     ? await probeCodexModelsLive()
+    : null;
+  // Injected by Phase 2 only — never probed here (see the doc comment on
+  // probeAntigravityModelsLive for why).
+  const agyLive = detectedById.get('antigravity-cli')?.found
+    ? (opts?.antigravityModels ?? null)
     : null;
 
   // Kimi's catalog is a file read, not a subprocess: `/login` writes the
@@ -230,7 +310,13 @@ export async function seedCliVoices(): Promise<{
     // Prefer live probe over static catalog; fall back to static when the
     // CLI doesn't expose model listing or the probe failed.
     const liveModels =
-      cli === 'codex-cli' ? codexLive : cli === 'kimi-cli' ? kimiLive : null;
+      cli === 'codex-cli'
+        ? codexLive
+        : cli === 'kimi-cli'
+          ? kimiLive
+          : cli === 'antigravity-cli'
+            ? agyLive
+            : null;
     const staticModels = UI_LINEAGE_AVAILABLE_MODELS[uiLineage] ?? [];
     const models = liveModels ?? staticModels;
     const latestModel = models[0] ?? `${cli}-default`;
@@ -267,6 +353,7 @@ export async function seedCliVoices(): Promise<{
         provider,
         model_id: latestModel,
         lineage,
+        ...vendorFamilyFor(lineage, latestModel),
         ...(enabledOverride !== undefined ? { enabled: enabledOverride } : {}),
         // Clear the auto_missing tombstone when re-enabling. For all other
         // paths leave disabled_reason untouched (omitted → preserved).
@@ -297,6 +384,7 @@ export async function seedCliVoices(): Promise<{
             provider,
             model_id: m,
             lineage,
+            ...vendorFamilyFor(lineage, m),
           });
           updated++;
           continue;
@@ -316,6 +404,7 @@ export async function seedCliVoices(): Promise<{
           provider,
           model_id: m,
           lineage,
+          ...vendorFamilyFor(lineage, m),
           enabled,
         });
         added++;
@@ -363,6 +452,7 @@ export async function seedCliVoices(): Promise<{
         provider,
         model_id: latestModel,
         lineage,
+        ...vendorFamilyFor(lineage, latestModel),
         ...(enabledOverride !== undefined ? { enabled: enabledOverride } : {}),
       });
       added++;
@@ -376,6 +466,7 @@ export async function seedCliVoices(): Promise<{
           provider,
           model_id: m,
           lineage,
+          ...vendorFamilyFor(lineage, m),
           enabled,
         });
         added++;
@@ -395,6 +486,32 @@ export async function seedCliVoices(): Promise<{
  */
 function hasMigrationDataFor(data: MigrationData, ui: UiLineage): boolean {
   return data.byUiLineage.get(ui) !== undefined;
+}
+
+/**
+ * Phase 2 — background warmup for Antigravity's model catalog. Called
+ * AFTER `fastify.listen()` for the same reason as the opencode warmup:
+ * `agy models` is a ~3s network fetch, and no user should wait on it for
+ * the daemon to come up.
+ *
+ * Re-runs the ordinary (idempotent) Phase 1 seed with the live list
+ * injected, so agy rows converge on what this account can actually reach
+ * — dropping any static-catalog entries the account has no access to and
+ * picking up models Google added since release. Best-effort: on a failed
+ * probe the static rows Phase 1 already wrote simply stand.
+ */
+export async function seedAntigravityVoicesAsync(): Promise<{
+  added: number;
+  updated: number;
+  disabled: number;
+} | null> {
+  const detect = detectAllClis();
+  if (!detect.find((d) => d.id === 'antigravity-cli')?.found) return null;
+
+  const live = await probeAntigravityModelsLive();
+  if (!live) return null;
+
+  return seedCliVoices({ antigravityModels: live });
 }
 
 /**
